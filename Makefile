@@ -15,3 +15,6 @@ qemu: disk.img
 
 write_mbr: write_mbr.c
 
+clean:
+	rm *.bin write_mbr *.o
+
