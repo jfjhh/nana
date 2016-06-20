@@ -54,10 +54,25 @@ keyget:	xor ax, ax		; ah is 0
 	loop .bootc
 
 bootp:	; read the bootable partitions
+	; xor cx, cx
+	; mov ah, 0x41		; int 0x13 disk extension installation check
+	; mov bx, 0x55aa
+	; ; dl already set
+	; int 0x13
+	; xchg bx, bx		; bochs breakpoint
+	; jc .err
+	; cmp bx, 0xaa55		; bx is 0xaa55 if installed
+	; jne .err
+	; cmp cl, 1		; mod 2, check first bit
+	; jne .err
+
 	mov ax, [si+8]		; first word of LBA sector
 	mov [dpkt.startblk], ax
 	mov ax, [si+10]		; second word of LBA sector
 	mov [dpkt.startblk+2], ax
+
+	mov ax, dpkt.transbuf	; dest segment
+	mov es, ax		; some BIOSes require es to be the DAP segment
 
 	mov ah, 0x42		; extended read
 	mov dl, [ds:disk]	; some BIOSes trash dx, so read the num again
@@ -66,7 +81,7 @@ bootp:	; read the bootable partitions
 	jnc .ok
 
 	; show error with extended read
-	mov bx, 0x4f20		; red bg, white text, spaces
+.err:	mov bx, 0x4f20		; red bg, white text, spaces
 	mov dx, err.extread	; error message
 	call print
 	jmp halt
@@ -181,8 +196,10 @@ dpkt:				; disk packet for int 0x13, ah=0x42
 .size:		db 0x10		; size: 0x10
 .reserved:	db 0x00		; reserved byte (0x00)
 .blocks:	dw 0x0001	; blocks to transfer
-.transbuf:	dd 0x07c00000	; 0x7c00 offset, segment 0x0000
+; .transbuf:	dd 0x07c00000	; 0x7c00 offset, segment 0x0000
+.transbuf:	dd 0x00007c00	; 0x7c00 offset, segment 0x0000
 .startblk:	dq 0		; starting absolute block number
+.ltransbuf:	dq 0		; optional long 64 bit transfer buffer
 
 ;;;;;;;; END DATA ;;;;;;;;
 

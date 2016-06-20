@@ -4,7 +4,8 @@
 ; Alex Striff.
 ;
 
-[ORG 0x7c00]			; add to offsets
+[bits 16]
+[org 0x7c00]			; add to offsets
 
 ;;;;;;;; START MACROS ;;;;;;;;
 
@@ -100,7 +101,7 @@ lowmem:	; lowmem detection
 .end:
 
 ; read more bootloader code from disk into memory
-	push word 0x0600	; offset
+	push word 0x8000	; offset
 	push word 0x0000	; segment
 	push word 1		; number of sectors to read
 	push word 1		; logical sector
@@ -111,7 +112,7 @@ lowmem:	; lowmem detection
 	newline
 
 	; first dword
-	push dword [0x0600]
+	push dword [0x8000]
 	push word 2
 	call print_hex
 	add sp, 6
@@ -122,7 +123,7 @@ lowmem:	; lowmem detection
 	call print_hex
 	add sp, 6
 
-	jmp 0x0600
+	jmp 0x8000
 
 ; if kernel exits, do as much nothing as possible
 halt:	cli			; no interrupts
