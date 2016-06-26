@@ -24,12 +24,15 @@
 
 start:
 	; setup segments and stack
-	xor ax, ax		; make it zero
-	mov ds, ax		; ds = 0
-	mov ss, ax		; stack starts at segment 0
-	mov sp, 0x9c00		; 0x2000 past code start,
-				; making the stack 8KiB in size
+	; use values from MBR loading
+	; xor ax, ax		; make it zero
+	; mov ds, ax		; ds = 0
+	; mov es, ax		; es = 0
+	; mov ss, ax		; stack starts at segment 0
+	; mov sp, 0x9c00		; 0x2000 past code start,
+	; 			; making the stack 8KiB in size
 	mov [ds:disk], dl	; save disk number
+	mov [ds:part], si	; save partition offset
 
 	; clear and attribute screen with video memory manipulation
 clear:	push es
@@ -95,15 +98,21 @@ lowmem:	; lowmem detection
 	int 0x10
 .end:
 
-	; read more bootloader code from disk into memory
-	push word 0x7e00	; offset
-	push word 0x0000	; segment
-	push word 8		; number of sectors to read
-	push word 1		; logical sector
-	call read_sectors
-	add sp, 8
+	; read more code from the hidden sectors
+	mov si, [ds:part]	; get partition entry offset
+	mov ax, [ds:si+8]	; first word of VBR sector
+	inc ax			; skip over the VBR (this sector)
+	mov [dap.startblk], ax
+	mov ax, [ds:si+10]	; second word of VBR sector
+	mov [dap.startblk+2], ax
+	
+	mov ah, 0x42		; extended read
+	mov dl, [ds:disk]	; some BIOSes trash dx, so read the num again
+	mov si, dap		; ds is 0, so ds:si is right disk address packet
+	int 0x13
+	jnc .ok
 
-	jmp 0x0000:0x7e00
+.ok:	jmp 0x0000:after_bootsector
 
 ;;;;;;;; END CODE ;;;;;;;;
 
@@ -150,94 +159,12 @@ print_hex:
 	pop bp
 	ret
 
-; read sectors from disk into memory
-; - first word param is the logical sector number
-; - second word param is the number of sectors to read
-; - third param is the segment to read to
-; - fourth param is the offset to read to
-read_sectors:
-	push bp			; [bp+4] is log sec num, [bp+6] is num sec,
-	mov bp, sp		; [bp+8] is segment, [bp+10] is offset
-
-	newline
-	push dword [bp+4]
-	push dword [bp+8]
-	push word 4
-	call print_hex
-	add sp, 10
-
-	; sector = log_sec % SECTORS_PER_TRACK
-	; head   = (log_sec / SECTORS_PER_TRACK) % HEADS
-	mov ax, [bp+4]		; logical sector number
-	xor dx, dx		; dx is high part of dividend (== 0)
-	mov bx, sec_per_track	; divisor
-	div bx			; do the division
-	mov [ds:sec], dx	; sector is the remainder
-	and ax, 1		; same as mod by HEADS==2 (slight hack)
-	mov [ds:head], ax
-
-	; track = log_sec / (SECTORS_PER_TRACK*HEADS)
-	mov ax, [bp+4]		; logical sector number
-	xor dx, dx		; dx is high part of dividend
-	mov bx, sec_per_track*2	; divisor
-	div bx			; do the division
-	mov [ds:track], ax	; track is quotient
-
-	; do the BIOS interrupt
-.try:	mov ax, [bp+8]
-	push es
-	mov es, ax		; dest segment goes in es
-	mov ah, 0x02		; read sectors to memory
-	mov al, [bp+6]		; number of sectors
-	mov bx, [ds:track]	; track number...
-	mov ch, bl		; goes in ch
-	mov bx, [ds:sec]	; sector number...
-	mov cl, bl		; goes in cl...
-	inc cl			; but it must be 1-based, not 0-based
-	mov bx, [ds:head]	; head number...
-	mov dh, bl		; goes in dh
-	mov dl, 0x80		; hard code boot drive number
-	; mov dl, [ds:disk]	; boot drive number
-	mov bx, [bp+10]		; offset (es:bx points to buffer)
-
-	int 0x13
-	pop es
-	jnc .ok
-
-	; error
-	mov ah, 0x13		; write string
-	mov al, 00000001b	; update cursor, text only
-	xor bh, bh		; page 0
-	mov bl, errattr		; attribute
-	mov cx, lowmem_err_len	; length
-	mov dx, 0x0301		; row 3, col 0
-	mov bp, lowmem_err	; es:bp is string
-	int 0x10
-
-	; print status
-	shr ax, 8
-	push ax
-	push word 1
-	call print_hex
-	add sp, 4
-
-	dec byte [ds:tries]
-	jnz .try
-
-	; cannot read, give up
-	cli
-.halt:	hlt
-	jmp .halt
-
-.ok:	pop bp
-	ret
-
 ;;;;;;;; END SUBROUTINES ;;;;;;;;
 
 ;;;;;;;; START STRINGS ;;;;;;;;
 
-strattr:	equ 0x0f	; white text
-errattr:	equ 0x0c	; light red text
+strattr:	equ 0x5f	; pink bg, white text
+errattr:	equ 0x5c	; pink bg, light red text
 
 os_banner:	db " Unnamed ", 0x02, "S "
 os_banner_len:	equ $ - os_banner
@@ -252,15 +179,23 @@ lowmem_err_len:	equ $ - lowmem_err
 
 ;;;;;;;; START TABLES ;;;;;;;;
 
-sec_per_track:	equ 18
-heads:		equ 2
-cylinders:	equ 80
+; sec_per_track:	equ 18
+; heads:		equ 2
+; cylinders:	equ 80
 
-head:		dw 0
-track:		dw 0
-sec:		dw 0
-tries:		db 3
+; head:		dw 0
+; track:		dw 0
+; sec:		dw 0
+; tries:		db 3
 disk:           db 0
+part:           dw 0
+
+dap:				; disk address packet for int 0x13, ah=0x42
+.size:		db 0x10		; size: 0x10
+.reserved:	db 0x00		; reserved byte (0x00)
+.blocks:	dw 0x0010	; blocks to transfer (8K)
+.transbuf:	dd 0x00007e00	; segment 0x0000, offset 0x7e00
+.startblk:	dq 2049		; starting absolute block number
 
 gdtinfo:
 	dw gdt_end - gdt - 1	; last byte in table

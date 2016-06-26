@@ -15,6 +15,7 @@ start:
 	; setup segments and stack
 	xor ax, ax		; make it zero
 	mov ds, ax		; ds = 0
+	mov es, ax		; es = 0
 	mov ss, ax		; stack starts at segment 0
 	mov sp, 0x7c00		; 0x7600 past code start, after relocation,
 				; making the stack 29.5KiB bytes in size,
@@ -31,25 +32,14 @@ newmem:
 	sti			; interrupts ok
 	mov [ds:disk], dl	; save disk number from BIOS
 
-	; DEBUGGING
-	; clear and attribute screen with video memory manipulation
-clear:	push es
-	mov ax, 0xb800		; 0x000b8000 is video memory in EBA
-	mov es, ax		; set segment
-	mov bx, 0x5f01		; pink bg, white text, smileys
-	mov cx, 80 * 25		; chars in a text video display
-.loop:	mov si, cx
-	shl si, 1
-	mov word [es:0+si-2], bx	; write to video memory
-	loop .loop
-	pop es
-
 	xor si, si
 	mov si, 0x07be		; first partition entry boot flag byte address
 	mov cx, 4		; try 4 partitions
 .booti:	mov al, [si]		; Nth partition entry boot flag byte
 	cmp al, 0x80
-	je bootp
+	mov [ds:part], si	; save the partition entry offset
+	; je bootp
+	je ext			; CHS sucks, so just do extended read anyway
 	add si, 0x10
 	loop .booti
 
@@ -57,69 +47,73 @@ clear:	push es
 	mov word [dap.startblk+2], 0
 	jmp ext.read
 
-bootp:	; read the bootable partitions
-	; get drive info
-	cmp byte [ds:disk], 0x80	; hard drive
-	jb .calc		; use defaults for emulated floppy
+; bootp:	; read the bootable partitions
+; 	; check if it can be done by CHS alone
+; 	mov ax, word [si+8]
+; 	add ax, word [dap.blocks]
+; 	cmp ax, 2812		; max sectors possible on USB emulating floppy
+; 	ja ext
 
-	xor ax, ax		; es:di == 0x0000:0x0000
-	mov es, ax		; to guard against BIOS bugs
-	mov di, ax
-	mov ah, 0x08		; get drive parameters
-	mov dl, [ds:disk]
-	int 0x13
-	jc .calc		; just try with default values
+; 	; get drive info
+; 	cmp byte [ds:disk], 0x80	; hard drive
+; 	jb .calc		; use defaults for emulated floppy
 
-	dec dh			; dh is heads - 1
-	mov [ds:heads], dh
+; 	xor ax, ax		; es:di == 0x0000:0x0000
+; 	mov es, ax		; to guard against BIOS bugs
+; 	mov di, ax
+; 	mov ah, 0x08		; get drive parameters
+; 	mov dl, [ds:disk]
+; 	int 0x13
+; 	jc .calc		; just try with default values
 
-	and cl, 0x3f		; sectors_per_track, low bits 5-0
-	mov [ds:sec_per_track], cl
+; 	dec dh			; dh is heads - 1
+; 	mov [ds:heads], dh
 
-.calc:
-	; sector == log_sec % SECTORS_PER_TRACK
-	; head   == (log_sec / SECTORS_PER_TRACK) % HEADS
-	mov ax, [si+8]		; logical sector number
-	xor dx, dx		; dx is high part of dividend (== 0)
-	mov bx, [ds:sec_per_track]	; divisor
-	div bx			; do the division
-	mov [ds:sec], dx	; sector is the remainder
-	xor bx, bx
-	mov bl, [ds:heads]	; modulus by found heads
-	xor dx, dx
-	div bx
-	mov [ds:head], dx
-	; and ax, 1		; same as mod by HEADS==2 (slight hack)
-	; mov [ds:head], ax
+; 	and cl, 0x3f		; sectors_per_track, low bits 5-0
+; 	mov [ds:sec_per_track], cl
 
-	; track = log_sec / (SECTORS_PER_TRACK*HEADS)
-	mov ax, [si+8]		; logical sector number
-	xor dx, dx		; dx is high part of dividend
-	mov bx, [ds:sec_per_track]	; divisor
-	shl bx, 1		; but divisor times 2
-	div bx			; do the division
-	mov [ds:track], ax	; track is quotient
+; .calc:	; sector == log_sec % SECTORS_PER_TRACK
+; 	; head   == (log_sec / SECTORS_PER_TRACK) % HEADS
+; 	mov ax, [si+8]		; logical sector number
+; 	xor dx, dx		; dx is high part of dividend (== 0)
+; 	mov bx, [ds:sec_per_track]	; divisor
+; 	div bx			; do the division
+; 	mov [ds:sec], dx	; sector is the remainder
 
-	; do the BIOS interrupt
-.try:	mov ax, destseg
-	mov es, ax		; dest segment goes in es
-	mov ah, 0x02		; read sectors to memory
-	mov al, [dap.blocks]	; num sectors
-	mov bx, [ds:track]	; track number...
-	mov ch, bl		; goes in ch
-	mov bx, [ds:sec]	; sector number...
-	mov cl, bl		; goes in cl...
-	inc cl			; but it must be 1-based, not 0-based
-	mov bx, [ds:head]	; head number...
-	mov dh, bl		; goes in dh
-	mov dl, [ds:disk]	; boot drive number
-	mov bx, destoff		; offset (es:bx points to buffer)
+; 	xor bx, bx
+; 	mov bl, [ds:heads]	; modulus by found heads
+; 	xor dx, dx
+; 	div bx
+; 	mov [ds:head], dx
 
-	int 0x13
-	jnc ok
+; 	; track = log_sec / (SECTORS_PER_TRACK*HEADS)
+; 	mov ax, [si+8]		; logical sector number
+; 	xor dx, dx		; dx is high part of dividend
+; 	mov bx, [ds:sec_per_track]	; divisor
+; 	shl bx, 1		; but divisor times 2
+; 	div bx			; do the division
+; 	mov [ds:track], ax	; track is quotient
 
-	dec byte [ds:tries]
-	jnz .try
+; 	; do the BIOS interrupt
+; .try:	mov ax, destseg
+; 	mov es, ax		; dest segment goes in es
+; 	mov ah, 0x02		; read sectors to memory
+; 	mov al, [dap.blocks]	; num sectors
+; 	mov bx, [ds:track]	; track number...
+; 	mov ch, bl		; goes in ch
+; 	mov bx, [ds:sec]	; sector number...
+; 	mov cl, bl		; goes in cl...
+; 	inc cl			; but it must be 1-based, not 0-based
+; 	mov bx, [ds:head]	; head number...
+; 	mov dh, bl		; goes in dh
+; 	mov dl, [ds:disk]	; boot drive number
+; 	mov bx, destoff		; offset (es:bx points to buffer)
+
+; 	int 0x13
+; 	jnc ok
+
+; 	dec byte [ds:tries]
+; 	jnz .try
 
 ext:	; an extended read is required
 	mov ax, [si+8]		; first word of LBA sector
@@ -127,7 +121,8 @@ ext:	; an extended read is required
 	mov ax, [si+10]		; second word of LBA sector
 	mov [ds:dap.startblk+2], ax
 
-.read:	mov ah, 0x42		; extended read
+.read:
+	mov ah, 0x42		; extended read
 	mov dl, [ds:disk]	; some BIOSes trash dx, so read the num again
 	mov si, dap		; ds is 0, so ds:si is right disk address packet
 	int 0x13
@@ -139,7 +134,20 @@ ext:	; an extended read is required
 	call print
 	jmp halt
 
-ok:	; ds:si points to boot part entry in mbr
+ok:
+	; clear and attribute screen with video memory manipulation
+	push es
+	mov ax, 0xb800		; 0x000b8000 is video memory in EBA
+	mov es, ax		; set segment
+	mov bx, 0x3f00		; cyan bg, white text, NUL chars
+	mov cx, 80 * 25		; chars in a text video display
+.loop:	mov si, cx
+	shl si, 1
+	mov word [es:0+si-2], bx	; write to video memory
+	loop .loop
+	pop es
+
+	mov si, [ds:part]	; ds:si points to boot part entry in mbr
 	mov dl, [ds:disk]	; ensure dl is the disk number, just in case
 
 	jmp destseg:destoff	; jump to loaded VBR
@@ -186,13 +194,14 @@ print:
 msg:
 .errread:	db "Cannot read disk!", 0
 
-sec_per_track:	dw 18
-heads:		dw 2
-head:		dw 0
-track:		dw 0
-sec:		dw 0
-tries:		db 5
+; sec_per_track:	dw 18
+; heads:		dw 2
+; head:		dw 0
+; track:		dw 0
+; sec:		dw 0
+; tries:		db 5
 disk:		db 0
+part:		dw 0
 
 destseg:	equ 0x0000
 destoff:	equ 0x7c00
