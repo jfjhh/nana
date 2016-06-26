@@ -38,7 +38,6 @@ newmem:
 .booti:	mov al, [si]		; Nth partition entry boot flag byte
 	cmp al, 0x80
 	mov [ds:part], si	; save the partition entry offset
-	; je bootp
 	je ext			; CHS sucks, so just do extended read anyway
 	add si, 0x10
 	loop .booti
@@ -46,74 +45,6 @@ newmem:
 	mov word [dap.startblk], 1	; no partitions, so try sector 1
 	mov word [dap.startblk+2], 0
 	jmp ext.read
-
-; bootp:	; read the bootable partitions
-; 	; check if it can be done by CHS alone
-; 	mov ax, word [si+8]
-; 	add ax, word [dap.blocks]
-; 	cmp ax, 2812		; max sectors possible on USB emulating floppy
-; 	ja ext
-
-; 	; get drive info
-; 	cmp byte [ds:disk], 0x80	; hard drive
-; 	jb .calc		; use defaults for emulated floppy
-
-; 	xor ax, ax		; es:di == 0x0000:0x0000
-; 	mov es, ax		; to guard against BIOS bugs
-; 	mov di, ax
-; 	mov ah, 0x08		; get drive parameters
-; 	mov dl, [ds:disk]
-; 	int 0x13
-; 	jc .calc		; just try with default values
-
-; 	dec dh			; dh is heads - 1
-; 	mov [ds:heads], dh
-
-; 	and cl, 0x3f		; sectors_per_track, low bits 5-0
-; 	mov [ds:sec_per_track], cl
-
-; .calc:	; sector == log_sec % SECTORS_PER_TRACK
-; 	; head   == (log_sec / SECTORS_PER_TRACK) % HEADS
-; 	mov ax, [si+8]		; logical sector number
-; 	xor dx, dx		; dx is high part of dividend (== 0)
-; 	mov bx, [ds:sec_per_track]	; divisor
-; 	div bx			; do the division
-; 	mov [ds:sec], dx	; sector is the remainder
-
-; 	xor bx, bx
-; 	mov bl, [ds:heads]	; modulus by found heads
-; 	xor dx, dx
-; 	div bx
-; 	mov [ds:head], dx
-
-; 	; track = log_sec / (SECTORS_PER_TRACK*HEADS)
-; 	mov ax, [si+8]		; logical sector number
-; 	xor dx, dx		; dx is high part of dividend
-; 	mov bx, [ds:sec_per_track]	; divisor
-; 	shl bx, 1		; but divisor times 2
-; 	div bx			; do the division
-; 	mov [ds:track], ax	; track is quotient
-
-; 	; do the BIOS interrupt
-; .try:	mov ax, destseg
-; 	mov es, ax		; dest segment goes in es
-; 	mov ah, 0x02		; read sectors to memory
-; 	mov al, [dap.blocks]	; num sectors
-; 	mov bx, [ds:track]	; track number...
-; 	mov ch, bl		; goes in ch
-; 	mov bx, [ds:sec]	; sector number...
-; 	mov cl, bl		; goes in cl...
-; 	inc cl			; but it must be 1-based, not 0-based
-; 	mov bx, [ds:head]	; head number...
-; 	mov dh, bl		; goes in dh
-; 	mov dl, [ds:disk]	; boot drive number
-; 	mov bx, destoff		; offset (es:bx points to buffer)
-
-; 	int 0x13
-; 	jnc ok
-
-; 	dec byte [ds:tries]
-; 	jnz .try
 
 ext:	; an extended read is required
 	mov ax, [si+8]		; first word of LBA sector
@@ -194,12 +125,6 @@ print:
 msg:
 .errread:	db "Cannot read disk!", 0
 
-; sec_per_track:	dw 18
-; heads:		dw 2
-; head:		dw 0
-; track:		dw 0
-; sec:		dw 0
-; tries:		db 5
 disk:		db 0
 part:		dw 0
 
