@@ -21,16 +21,16 @@ int main(int argc, const char **argv)
 	wmbr = (argc == 4) ? 0 : 1;
 
 	/* start of the sector */
-	start = wmbr ? 0 : 2048 * 512;
+	start = wmbr ? 0 : 2048 * 512; /* MBR or VBR. */
 	fseek(img, start, SEEK_SET);
 
 	/* byte 446 is where the disk id and partition table starts. */
-	max = wmbr ? 446 : 512;
+	max = wmbr ? 446 : -1;
 	n   = 0;
 	while ((c = getc(mbr)) != EOF && n++ < max)
 		putc(c, img);
 
-	if (wmbr) {
+	if (wmbr) { /* Put bootable magic word. */
 		fseek(img, 510, SEEK_SET);
 		putc('\x55', img);
 		putc('\xaa', img);

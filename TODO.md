@@ -21,23 +21,15 @@ Custom Bootloader
 
 - Load more bootloader code or load kernel (FAT FS).
 
-	+ Chain into FAT Volume Boot Record.
+	+ Chain into FAT Volume Boot Record: Have it load more bootloader code from
+	  the hidden sectors, as well as a list of blocks that the kernel image is
+	  on, within the actual FS (FAT for now). It should be chain-loadable, i.e.
+	  a third-party MBR can load it or another partition.
 	+ http://wiki.osdev.org/FAT
 
 	+ Enable Protected Mode and A20 Line.
 	+ http://wiki.osdev.org/Protected_Mode
 	+ http://wiki.osdev.org/A20_Line
 
-- Enable paging in bootoader or kernel?
-
-Kernel
-------
-
-- Initialization
-
-	+ Setup GDT.
-	+ http://wiki.osdev.org/Global_Descriptor_Table
-
-	+ Setup IDT (protected mode).
-	+ http://wiki.osdev.org/Interrupts_Descriptor_Table
+- Enable paging in bootloader or kernel?
 

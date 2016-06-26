@@ -10,12 +10,10 @@
 ;;;;;;;; START MACROS ;;;;;;;;
 
 %macro newline 0
-
 	mov ax, 0x0e0d		; teletype output, ASCII CR
 	int 0x10
 	mov al, 0x0a		; ASCII LF
 	int 0x10
-
 %endmacro
 
 ;;;;;;;; END MACROS ;;;;;;;;
@@ -28,18 +26,16 @@ start:
 	; setup segments and stack
 	xor ax, ax		; make it zero
 	mov ds, ax		; ds = 0
-	mov es, ax		; es = 0
 	mov ss, ax		; stack starts at segment 0
 	mov sp, 0x9c00		; 0x2000 past code start,
 				; making the stack 8KiB in size
-	; mov sp, 0x7fff		; 0x03ff past code start,
-	; 			; making the stack 1023 bytes in size
+	mov [ds:disk], dl	; save disk number
 
 	; clear and attribute screen with video memory manipulation
 clear:	push es
 	mov ax, 0xb800		; 0x000b8000 is video memory in EBA
 	mov es, ax		; set segment
-	mov bx, 0x0a20		; blank space, light gray text
+	mov bx, 0x5f00		; pink bg, white text, NUL chars
 	mov cx, 80 * 25		; chars in a text video display
 .loop:	mov si, cx
 	shl si, 1
@@ -49,19 +45,18 @@ clear:	push es
 
 	; setup display color, cursor, etc.
 	mov ah, 0x0b	; BIOS interrupt set bg color
-	mov bx, 0x0009	; blue bg
+	mov bx, 0x0005	; pink bg
 	int 0x10
 
 	mov ah, 0x01		; setup cursor
-	mov ch, 01000010b	; erratic blink, topmost scan line 2
-	or cl, 00000011b	; bottom scan line 3
+	mov cx, 0x401f		; fast blink, block cursor: 0100 0000 0001 1111b
 	int 0x10
 
 	; os banner
 	mov ah, 0x13		; write string
 	mov al, 00000001b	; update cursor, text only
 	xor bh, bh		; page 0
-	mov bl, [ds:strattr]	; attribute
+	mov bl, strattr		; attribute
 	mov cx, os_banner_len	; length
 	mov dx, 0x0100 | (80 - os_banner_len) / 2	; row 0, centered
 	mov bp, os_banner	; es:bp is string
@@ -72,7 +67,7 @@ lowmem:	; lowmem detection
 	mov ah, 0x13		; write string
 	mov al, 00000001b	; update cursor, text only
 	xor bh, bh		; page 0
-	mov bl, [ds:strattr]	; attribute
+	mov bl, strattr		; attribute
 	mov cx, lowmem_msg_len	; length
 	mov dx, 0x0200		; row 2, col 0
 	mov bp, lowmem_msg	; es:bp is string
@@ -93,42 +88,22 @@ lowmem:	; lowmem detection
 .err:	mov ah, 0x13		; write string
 	mov al, 00000001b	; update cursor, text only
 	xor bh, bh		; page 0
-	mov bl, [ds:strattr]	; attribute
+	mov bl, strattr		; attribute
 	mov cx, lowmem_err_len	; length
 	mov dx, 0x0210		; row 2, col 16
 	mov bp, lowmem_err	; es:bp is string
 	int 0x10
 .end:
 
-; read more bootloader code from disk into memory
-	push word 0x8000	; offset
+	; read more bootloader code from disk into memory
+	push word 0x7e00	; offset
 	push word 0x0000	; segment
-	push word 1		; number of sectors to read
+	push word 8		; number of sectors to read
 	push word 1		; logical sector
 	call read_sectors
 	add sp, 8
 
-; print some of the copied sector
-	newline
-
-	; first dword
-	push dword [0x8000]
-	push word 2
-	call print_hex
-	add sp, 6
-
-	; last dword
-	push dword [0x07fb]
-	push word 2
-	call print_hex
-	add sp, 6
-
-	jmp 0x8000
-
-; if kernel exits, do as much nothing as possible
-halt:	cli			; no interrupts
-.loop:	hlt			; halt the CPU until next interrupt
-	jmp .loop		; even if hlt is interrupted, hlt again
+	jmp 0x0000:0x7e00
 
 ;;;;;;;; END CODE ;;;;;;;;
 
@@ -221,7 +196,8 @@ read_sectors:
 	inc cl			; but it must be 1-based, not 0-based
 	mov bx, [ds:head]	; head number...
 	mov dh, bl		; goes in dh
-	mov dl, 0x80		; hard code drive number to be 0x80 (hard drive)
+	mov dl, 0x80		; hard code boot drive number
+	; mov dl, [ds:disk]	; boot drive number
 	mov bx, [bp+10]		; offset (es:bx points to buffer)
 
 	int 0x13
@@ -232,7 +208,7 @@ read_sectors:
 	mov ah, 0x13		; write string
 	mov al, 00000001b	; update cursor, text only
 	xor bh, bh		; page 0
-	mov bl, [ds:errattr]	; attribute
+	mov bl, errattr		; attribute
 	mov cx, lowmem_err_len	; length
 	mov dx, 0x0301		; row 3, col 0
 	mov bp, lowmem_err	; es:bp is string
@@ -245,21 +221,23 @@ read_sectors:
 	call print_hex
 	add sp, 4
 
-	dec byte [cs:tries]
+	dec byte [ds:tries]
 	jnz .try
 
-	jmp halt		; cannot read, give up
+	; cannot read, give up
+	cli
+.halt:	hlt
+	jmp .halt
 
-.ok:
-	pop bp
+.ok:	pop bp
 	ret
 
 ;;;;;;;; END SUBROUTINES ;;;;;;;;
 
 ;;;;;;;; START STRINGS ;;;;;;;;
 
-strattr:	db 0x0f	; normal bg color, light green text
-errattr:	db 0xf4	; pink bg color, red text
+strattr:	equ 0x0f	; white text
+errattr:	equ 0x0c	; light red text
 
 os_banner:	db " Unnamed ", 0x02, "S "
 os_banner_len:	equ $ - os_banner
@@ -282,6 +260,7 @@ head:		dw 0
 track:		dw 0
 sec:		dw 0
 tries:		db 3
+disk:           db 0
 
 gdtinfo:
 	dw gdt_end - gdt - 1	; last byte in table
@@ -314,23 +293,32 @@ after_bootsector:		; should start at 0x7e00
 	;
 	; TODO: go into protected mode, turn on A20 line, to load more stuff
 	; TODO: int 0x15, ax = 0xe820 advanced memory detection.
+	; TODO: paging?
+	; TODO: proper GDT and IDT
 	; TODO: FAT
 	;
 
-; setup unreal mode (enable 32-bit offsets, but not beyond 1MiB mem)
-	; cli			; no interrupts
-	; push ds			; save real mode
+	call detect_a20
+	push ax
+	push word 0x01
+	call print_hex
+	add sp, 4
 
-	; lgdt [gdtinfo]		; load gdt register
+; setup protected mode
+	; interrupts already disabled
+	lgdt [gdtinfo]		; load gdt
+	mov eax, cr0		; switch to pmode by setting pmode bit
+	or al, 1
+	mov cr0, eax
+	jmp $ + 2		; tell 386/486 to not crash
+	mov ax, 0x10		; select descriptor 1 (data descriptor)
+	mov ds, ax
+	mov es, ax
+	mov fs, ax
+	mov gs, ax
+	mov ss, ax
 
-	; mov eax, cr0		; switch to pmode by...
-	; or al, 1		; setting pmode bit
-	; mov cr0, eax
-
-	; jmp $ + 2		; tell 386/486 to not crash
-
-	; mov bx, 0x08		; select descriptor 1
-	; mov ds, bx		; 8h = 1000b
+	jmp 0x08:0x1000		; set code descriptor, jump to kernel
 
 	; and al, 0xfe		; back to realmode...
 	; mov cr0, eax		; by toggling bit again
@@ -338,7 +326,44 @@ after_bootsector:		; should start at 0x7e00
 	; pop ds			; get back old segment
 	; sti			; interrupts ok
 
-	times 512-($-after_bootsector) nop	; fill remaining with nops
+;;;;;;;; START EXTENDED SUBROUTINES ;;;;;;;;
+
+; enable the A20 line: compare a low byte with 1 MiB higher to check mem wrap
+detect_a20:
+	pushf			; save flags
+	xor ax, ax
+	mov es, ax		; low segment
+	not ax
+	mov ds, ax		; high segment
+	mov di, 0x0500		; low offset
+	mov si, 0x0510		; high offset
+
+	mov al, byte [es:di]	; save old values
+	push ax
+	mov al, byte [ds:si]
+	push ax
+
+	mov byte [es:di], 0x00
+	mov byte [ds:si], 0xFF
+
+	cmp byte [es:di], 0xFF	; if same as [ds:si], then it wraps
+
+	pop ax			; restore old values
+	mov byte [ds:si], al
+	pop ax
+	mov byte [es:di], al
+
+	xor ax, ax
+	je .exit
+	inc ax
+
+.exit:	popf			; load old flags
+	ret
+
+;;;;;;;; END EXTENDED SUBROUTINES ;;;;;;;;
+
+	; times 508-($-after_bootsector) nop	; fill remaining with nops
+	align 512		; fill remaining sector with nops
 
 ;;;;;;;; END AFTER BOOTSECTOR CODE ;;;;;;;;
 
