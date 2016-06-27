@@ -27,16 +27,15 @@ start:
 	; use values from MBR loading
 	; xor ax, ax		; make it zero
 	; mov ds, ax		; ds = 0
-	; mov es, ax		; es = 0
 	; mov ss, ax		; stack starts at segment 0
 	; mov sp, 0x9c00		; 0x2000 past code start,
 	; 			; making the stack 8KiB in size
+
 	mov [ds:disk], dl	; save disk number
 	mov [ds:part], si	; save partition offset
 
 	; clear and attribute screen with video memory manipulation
-clear:	push es
-	mov ax, 0xb800		; 0x000b8000 is video memory in EBA
+clear:	mov ax, 0xb800		; 0x000b8000 is video memory in EBA
 	mov es, ax		; set segment
 	mov bx, 0x5f00		; pink bg, white text, NUL chars
 	mov cx, 80 * 25		; chars in a text video display
@@ -44,7 +43,6 @@ clear:	push es
 	shl si, 1
 	mov word [es:0+si-2], bx	; write to video memory
 	loop .loop
-	pop es
 
 	; setup display color, cursor, etc.
 	mov ah, 0x0b	; BIOS interrupt set bg color
@@ -86,7 +84,7 @@ lowmem:	; lowmem detection
 	push word 1
 	call print_hex
 	add sp, 4		; size word + print word = 2 words = 4 bytes
-	jmp .end
+	jmp read
 
 .err:	mov ah, 0x13		; write string
 	mov al, 00000001b	; update cursor, text only
@@ -96,10 +94,13 @@ lowmem:	; lowmem detection
 	mov dx, 0x0210		; row 2, col 16
 	mov bp, lowmem_err	; es:bp is string
 	int 0x10
-.end:
+
+	cli
+.halt:	hlt
+	jmp .halt
 
 	; read more code from the hidden sectors
-	mov si, [ds:part]	; get partition entry offset
+read:	mov si, [ds:part]	; get partition entry offset
 	mov ax, [ds:si+8]	; first word of VBR sector
 	inc ax			; skip over the VBR (this sector)
 	mov [dap.startblk], ax
@@ -221,16 +222,76 @@ after_bootsector:		; should start at 0x7e00
 	mov ax, 0x0e02		; teletype output, smiley
 	int 0x10
 
+	; set video mode
+	mov ax, 0x0013		; set video mode, 320x200 256-color VGA mode
+	int 0x10
+	mov ax, 0x0500		; set active display page, page to display
+	int 0x10
+
+	; clear and attribute screen with video memory manipulation
+	mov ax, 0xa000		; 0x000a0000 is video memory in VGA
+	mov es, ax		; set segment
+	mov bl, 0x04		; debug color
+	; mov bl, 0x3e		; as close as VGA can get to *the* top pink
+	mov cx, (320 * 200)	; pixels 640x480 vga video display
+.pink:	mov si, cx
+	mov byte [es:0+si-1], bl	; write to video memory
+	loop .pink
+
+	; ; read in the splash screen bitmap
+	; mov ax, 2060		; for now, from a hardcoded block
+	; mov [dap.startblk], ax
+	; xor ax, ax
+	; mov [dap.startblk+2], ax
+	; mov ax, 0x8000		; for now, to a hardcoded memory location
+	; mov [dap.transbuf], ax
+	; xor ax, ax
+	; mov [dap.transbuf+2], ax
+	; mov ah, 0x42		; extended read
+	; mov dl, [ds:disk]	; some BIOSes trash dx, so read the num again
+	; mov si, dap		; ds is 0, so ds:si is right disk address packet
+	; int 0x13
+
+	; read in the splash screen image
+	mov ax, 125		; The image (VGA memory) is 64,000 bytes
+	mov [dap.blocks], ax
+	mov ax, 2076		; for now, from a hardcoded block
+	mov [dap.startblk], ax
+	xor ax, ax
+	mov [dap.startblk+2], ax
+	mov ax, 0x8000		; for now, to a hardcoded memory location
+	mov [dap.transbuf], ax
+	xor ax, ax
+	mov [dap.transbuf+2], ax
+	mov ah, 0x42		; extended read
+	mov dl, [ds:disk]	; some BIOSes trash dx, so read the num again
+	mov si, dap		; ds is 0, so ds:si is right disk address packet
+	int 0x13
+
+	push ds
+	mov cx, (320 * 200) / 2	; words in the bitmap
+	mov ax, 0xa000		; 0x000a0000 is video memory in VGA
+	mov es, ax		; set segment
+	mov ax, 0x0800		; set ds to be 0x0800 (loaded image base)
+	mov ds, ax		; set segment
+	xor si, si		; src
+	xor di, di		; dest
+	rep movsw		; copy the memory
+	pop ds
+
+	; TODO: convert a bit in the bitmap to a bottom pink byte in VGA memory!
+	; mov bl, 0x54		; as close as VGA can get to *the* bottom pink
+
 	cli
-.loop:	hlt
-	jmp .loop
+.halt:	hlt
+	jmp .halt
 
 	;
-	; TODO: go into protected mode, turn on A20 line, to load more stuff
+	; TODO: go into protected mode and turn on A20 line to load more, higher
 	; TODO: int 0x15, ax = 0xe820 advanced memory detection.
-	; TODO: paging?
 	; TODO: proper GDT and IDT
-	; TODO: FAT
+	; TODO: FAT (12, 16, or 32?) boot partition
+	; TODO: paging?
 	;
 
 	call detect_a20

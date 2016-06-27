@@ -1,5 +1,5 @@
 *.img
 *.bak
 *.bin
-write_mbr
+write_data
 

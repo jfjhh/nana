@@ -1,28 +1,31 @@
 CC=gcc
+ASM=nasm
 CFLAGS=-Wall -Werror -pedantic -O2 -std=c11
 DISK=bochs.img
 
 all: os
 
-os: write_mbr mbr.bin boot.bin | $(DISK)
+os: write_data mbr.bin boot.bin data | $(DISK)
 
 $(DISK): make_disk.sh
-	./make_disk.sh "$(DISK)"
+	./$< $@
+	touch data/.newdisk
 
+ data: $(DISK) write_data
+	@make -C data/ DISK=$(DISK)
 
-mbr.bin: mbr.asm | $(DISK)
-	nasm mbr.asm -o mbr.bin
-	./write_mbr mbr.bin $(DISK)
+mbr.bin: mbr.asm write_data | $(DISK)
+	$(ASM) $< -o $@
+	./write_data $@ $(DISK)
 
-boot.bin: boot.asm | $(DISK)
-	nasm boot.asm -o boot.bin
-	./write_mbr boot.bin $(DISK) bootloader
+boot.bin: boot.asm write_data | $(DISK)
+	$(ASM) $< -o $@
+	./write_data $@ $(DISK) 2048
 
-
-write_mbr: write_mbr.c
+write_data: write_data.c
 
 clean:
-	rm *.bin write_mbr *.o; true
+	rm *.bin write_data *.o 2> /dev/null; true
 
 diskclean: clean
 	rm $(DISK)
@@ -33,5 +36,7 @@ qemu: os
 bochs: os bochsrc.txt
 	bochs
 
-.PHONY: os qemu bochs clean diskclean disk
+.PHONY: os qemu bochs clean diskclean disk data
+
+.PRECIOUS: $(SPLASH)
 

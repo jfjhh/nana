@@ -5,6 +5,7 @@ int main(int argc, const char **argv)
 {
 	FILE *mbr, *img;
 	int c, wmbr;
+	unsigned int arg;
 	size_t n, max, start;
 
 	if (argc < 3)
@@ -21,7 +22,19 @@ int main(int argc, const char **argv)
 	wmbr = (argc == 4) ? 0 : 1;
 
 	/* start of the sector */
-	start = wmbr ? 0 : 2048 * 512; /* MBR or VBR. */
+	if (wmbr) {
+		start = 0;
+	} else {
+		if (!sscanf(argv[3], "%u", &arg)) {
+			fclose(img);
+			fclose(mbr);
+			fprintf(stderr,
+					"Invalid starting block argument: '%s'.\n", argv[3]);
+			return EXIT_FAILURE;
+		} else {
+			start = arg * 512;
+		}
+	}
 	fseek(img, start, SEEK_SET);
 
 	/* byte 446 is where the disk id and partition table starts. */
