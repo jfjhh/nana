@@ -1,2 +1,1 @@
 momo-splash_320x200.bin,2060
-momo-splash_320x200x8.bin,2076

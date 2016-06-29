@@ -1,5 +1,11 @@
+# General
 *.img
 *.bak
 *.bin
+
+# Tools
 write_data
+
+# Data
+!data/*.bin
 
