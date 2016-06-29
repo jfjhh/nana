@@ -52,8 +52,7 @@ ext:	; an extended read is required
 	mov ax, [si+10]		; second word of LBA sector
 	mov [ds:dap.startblk+2], ax
 
-.read:
-	mov ah, 0x42		; extended read
+.read:	mov ah, 0x42		; extended read
 	mov dl, [ds:disk]	; some BIOSes trash dx, so read the num again
 	mov si, dap		; ds is 0, so ds:si is right disk address packet
 	int 0x13
@@ -61,33 +60,24 @@ ext:	; an extended read is required
 
 	; show error with extended read
 	mov bx, 0x4f00		; red bg, white text, blanks
-	mov dx, msg.errread	; error message
+	mov dx, diskmsg		; error message
 	call print
 	jmp halt
 
-ok:
-	; clear and attribute screen with video memory manipulation
-	push es
-	mov ax, 0xb800		; 0x000b8000 is video memory in EBA
-	mov es, ax		; set segment
-	mov bx, 0x3f00		; cyan bg, white text, NUL chars
-	mov cx, 80 * 25		; chars in a text video display
-.loop:	mov si, cx
-	shl si, 1
-	mov word [es:0+si-2], bx	; write to video memory
-	loop .loop
-	pop es
-
-	mov si, [ds:part]	; ds:si points to boot part entry in mbr
+ok:	mov si, [ds:part]	; ds:si points to boot part entry in mbr
 	mov dl, [ds:disk]	; ensure dl is the disk number, just in case
 
 	jmp destseg:destoff	; jump to loaded VBR
+
+halt:	cli
+.loop:	hlt
+	jmp .loop
 
 ;;;;;;;; END CODE ;;;;;;;;
 
 ;;;;;;;; START SUBROUTINES ;;;;;;;;
 
-; clear and attribute screen with video memory manipulation
+; print a message to the screen with video memory manipulation
 print:
 	push bp
 	mov bp, sp
@@ -122,8 +112,7 @@ print:
 
 ;;;;;;;; START DATA ;;;;;;;;
 
-msg:
-.errread:	db "Cannot read disk!", 0
+diskmsg:	db "Cannot read disk!", 0
 
 disk:		db 0
 part:		dw 0
@@ -140,18 +129,10 @@ dap:				; disk address packet for int 0x13, ah=0x42
 
 ;;;;;;;; END DATA ;;;;;;;;
 
-	times 432-($-$$) db 0	; fill sector with zeros
+	times 436-($-$$) db 0	; fill sector with zeros
 
-halt:	cli
-.loop:	hlt
-	jmp .loop
-
-diskid:	db "OSMomoDisk"
-
-part1:	times 16 db 0x00	; partition entry 1
-part2:	times 16 db 0x00	; partition entry 2
-part3:	times 16 db 0x00	; partition entry 3
-part4:	times 16 db 0x00	; partition entry 4
+diskid:	db "OSMomoDisk"		; disk identifier
+parts:	times 64 db 0x00	; partition table
 
 	db 0x55			; valid boot sector magic word
 	db 0xaa

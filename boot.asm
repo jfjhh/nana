@@ -34,47 +34,7 @@ start:
 	mov [ds:disk], dl	; save disk number
 	mov [ds:part], si	; save partition offset
 
-	; clear and attribute screen with video memory manipulation
-clear:	mov ax, 0xb800		; 0x000b8000 is video memory in EBA
-	mov es, ax		; set segment
-	mov bx, 0x5f00		; pink bg, white text, NUL chars
-	mov cx, 80 * 25		; chars in a text video display
-.loop:	mov si, cx
-	shl si, 1
-	mov word [es:0+si-2], bx	; write to video memory
-	loop .loop
-
-	; setup display color, cursor, etc.
-	mov ah, 0x0b	; BIOS interrupt set bg color
-	mov bx, 0x0005	; pink bg
-	int 0x10
-
-	mov ah, 0x01		; setup cursor
-	mov cx, 0x401f		; fast blink, block cursor: 0100 0000 0001 1111b
-	int 0x10
-
-	; os banner
-	mov ah, 0x13		; write string
-	mov al, 00000001b	; update cursor, text only
-	xor bh, bh		; page 0
-	mov bl, strattr		; attribute
-	mov cx, os_banner_len	; length
-	mov dx, 0x0100 | (80 - os_banner_len) / 2	; row 0, centered
-	mov bp, os_banner	; es:bp is string
-	int 0x10
-
 lowmem:	; lowmem detection
-	; print message
-	mov ah, 0x13		; write string
-	mov al, 00000001b	; update cursor, text only
-	xor bh, bh		; page 0
-	mov bl, strattr		; attribute
-	mov cx, lowmem_msg_len	; length
-	mov dx, 0x0200		; row 2, col 0
-	mov bp, lowmem_msg	; es:bp is string
-	int 0x10
-
-	; do the BIOS interrupt
 	clc			; clear carry flag
 	int 0x12		; request low memory size
 	jc .err			; the carry flag is set if it failed
@@ -89,7 +49,7 @@ lowmem:	; lowmem detection
 .err:	mov ah, 0x13		; write string
 	mov al, 00000001b	; update cursor, text only
 	xor bh, bh		; page 0
-	mov bl, strattr		; attribute
+	mov bl, errattr		; attribute
 	mov cx, lowmem_err_len	; length
 	mov dx, 0x0210		; row 2, col 16
 	mov bp, lowmem_err	; es:bp is string
@@ -164,16 +124,8 @@ print_hex:
 
 ;;;;;;;; START STRINGS ;;;;;;;;
 
-strattr:	equ 0x5f	; pink bg, white text
-errattr:	equ 0x5c	; pink bg, light red text
-
-os_banner:	db " Unnamed ", 0x02, "S "
-os_banner_len:	equ $ - os_banner
-
-lowmem_msg:	db "Low Mem KiB: "
-lowmem_msg_len:	equ $ - lowmem_msg
-
-lowmem_err:	db "ERR!"
+errattr:	equ 0x0c	; black bg, light red text
+lowmem_err:	db "ERROR: Could not determine available low memory!"
 lowmem_err_len:	equ $ - lowmem_err
 
 ;;;;;;;; END STRINGS ;;;;;;;;
@@ -219,8 +171,6 @@ gdt_end:
 ;;;;;;;; START AFTER BOOTSECTOR CODE ;;;;;;;;
 
 after_bootsector:		; should start at 0x7e00
-	mov ax, 0x0e02		; teletype output, smiley
-	int 0x10
 
 	; TODO: Check available video modes and skip splash if not supported
 	; set video mode
@@ -296,8 +246,7 @@ video:	mov ax, 0x0013		; set video mode, 320x200 256-color VGA mode
 	; TODO: FAT (12, 16, or 32?) boot partition
 	; TODO: paging?
 	;
-
-	call detect_a20
+a20:	call detect_a20
 	push ax
 	push word 0x01
 	call print_hex
