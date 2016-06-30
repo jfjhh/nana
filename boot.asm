@@ -7,17 +7,6 @@
 [bits 16]
 [org 0x7c00]			; add to offsets
 
-;;;;;;;; START MACROS ;;;;;;;;
-
-%macro newline 0
-	mov ax, 0x0e0d		; teletype output, ASCII CR
-	int 0x10
-	mov al, 0x0a		; ASCII LF
-	int 0x10
-%endmacro
-
-;;;;;;;; END MACROS ;;;;;;;;
-
  ;;;;;;;; START BOOTSECTOR ;;;;;;;;
 
 ;;;;;;;; START CODE ;;;;;;;;
@@ -234,6 +223,31 @@ video:	mov ax, 0x0013		; set video mode, 320x200 256-color VGA mode
 	cmp si, (320 * 200) / 8	; size of bitmap (in bytes)
 	jb .bmp
 	pop ds
+
+beep:	
+	; a note's frequency is (2^(n/12) * 440) Hz, where n is the number of
+	; half-steps the note is above A4
+	cli			; disable interrupts
+	mov al, 10110110b	; cmd: channel 2, lobyte/hibyte, mode 3, bin
+	out 0x43, al		; send command to PIT
+	mov ax, 1193		; 1193180 / 1000 (freq) == PIT frequency divisor
+	out 0x42, al		; set low byte of divisor
+	shr ax, 8
+	out 0x42, al		; set high byte of divisor
+	
+	in al, 0x61		; get the kbd controller byte
+	mov bl, al
+	or al, 0x03		; toggle bits 1 and 0 on
+	cmp al, bl
+	je .end			; don't set if already set
+	out 0x61, al		; set the PC speaker on
+.end:	; speaker is beeping
+	sti			; enable interrupts
+	xor ah, ah		; get keystroke (blocking)
+	int 0x16
+	in al, 0x61		; get the kbd controller byte
+	and al, 0xfc		; toggle bits 1 and 0 off
+	out 0x61, al		; set the PC speaker off
 
 	cli
 .halt:	hlt
