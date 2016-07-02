@@ -7,7 +7,10 @@
 [bits 16]
 [org 0x7c00]			; add to offsets
 
- ;;;;;;;; START BOOTSECTOR ;;;;;;;;
+;;;;;;;; START VOLUME BOOT SECTOR ;;;;;;;;
+
+%include "fat/bpb.inc"
+%include "fat/ebr.inc"
 
 ;;;;;;;; START CODE ;;;;;;;;
 
@@ -39,14 +42,11 @@ lowmem:	; lowmem detection
 	mov al, 00000001b	; update cursor, text only
 	xor bh, bh		; page 0
 	mov bl, errattr		; attribute
-	mov cx, lowmem_err_len	; length
+	mov cx, lowmem_err.len	; length
 	mov dx, 0x0210		; row 2, col 16
 	mov bp, lowmem_err	; es:bp is string
 	int 0x10
-
-	cli
-.halt:	hlt
-	jmp .halt
+	jmp halt
 
 	; read more code from the hidden sectors
 read:	mov si, [ds:part]	; get partition entry offset
@@ -55,14 +55,28 @@ read:	mov si, [ds:part]	; get partition entry offset
 	mov [dap.startblk], ax
 	mov ax, [ds:si+10]	; second word of VBR sector
 	mov [dap.startblk+2], ax
-	
+
 	mov ah, 0x42		; extended read
 	mov dl, [ds:disk]	; some BIOSes trash dx, so read the num again
 	mov si, dap		; ds is 0, so ds:si is right disk address packet
 	int 0x13
 	jnc .ok
 
+.err:	mov ah, 0x13		; write string
+	mov al, 00000001b	; update cursor, text only
+	xor bh, bh		; page 0
+	mov bl, errattr		; attribute
+	mov cx, load_err.len	; length
+	mov dx, 0x0210		; row 2, col 16
+	mov bp, load_err	; es:bp is string
+	int 0x10
+	jmp halt
+
 .ok:	jmp 0x0000:after_bootsector
+
+halt:	cli
+.loop	hlt
+	jmp .loop
 
 ;;;;;;;; END CODE ;;;;;;;;
 
@@ -115,7 +129,9 @@ print_hex:
 
 errattr:	equ 0x0c	; black bg, light red text
 lowmem_err:	db "ERROR: Could not determine available low memory!"
-lowmem_err_len:	equ $ - lowmem_err
+.len:		equ $ - lowmem_err
+load_err:	db "ERROR: Could not load additional bootstrap code!"
+.len:		equ $ - load_err
 
 ;;;;;;;; END STRINGS ;;;;;;;;
 
@@ -149,14 +165,12 @@ gdt_end:
 
 ;;;;;;;; END TABLES ;;;;;;;;
 
-	; times 510-($-$$) db 0	; fill sector w/ 0's
-	; 			; required by some BIOSes
 	times 510-($-$$) nop	; fill sector with nops
 	db 0x55			; valid boot sector magic word
 	db 0xaa
 
-;;;;;;;; END BOOTSECTOR ;;;;;;;;
-
+;;;;;;;; END VOLUME BOOT SECTOR ;;;;;;;;
+times 512 db 0
 ;;;;;;;; START AFTER BOOTSECTOR CODE ;;;;;;;;
 
 after_bootsector:		; should start at 0x7e00

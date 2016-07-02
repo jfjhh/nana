@@ -11,7 +11,7 @@ int main(int argc, const char **argv)
 	if (argc < 3)
 		return EXIT_FAILURE;
 
-	if (!(mbr = fopen(argv[1], "r"))) {
+	if (!(mbr = (argv[1][0] == '-') ? stdin : fopen(argv[1], "r"))) {
 		perror("could not open mbr binary");
 		return EXIT_FAILURE;
 	} else if (!(img = fopen(argv[2], "r+"))) {
