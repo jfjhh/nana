@@ -22,11 +22,13 @@ $(DISK): mbr.bin make_disk.sh write_data
 
 # Write all sectors to the image, and then re-do the VBR with a BPT (mformat).
 # Strange dd values are for a zero'ed 1440-byte, 3.5-inch floppy.
-$(BOOT): boot.bin write_data
+$(BOOT): vbr.bin bootloader.bin write_data
 	dd if=/dev/zero of=$@ bs=96 count=15
 	./write_data $< $@ 0
 	mformat -i $@ -v $(VOLNAME) -f 1440 -S 2 -H 18 -d 2 -r 512 -C -B $< ::
-	dd if=$@ bs=512 count=2 2> /dev/null | xxd
+	dd if=$@ bs=512 count=1 2> /dev/null | xxd
+	mcopy -i $@ bootloader.bin ::/BOOTMOMO.BIN
+	mdir -i $@
 	touch data/.newdisk -r $(DISK)
 
 nana: make_disk.sh write_data | $(DISK) $(BOOT)
