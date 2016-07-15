@@ -1,4 +1,10 @@
 #!/bin/sh -x
 
-mkdir -p bin out exe
+DIRS="bin bios data exe include out src"
+
+for DIR in $DIRS; do
+	mkdir -p $DIR .deps/$DIR
+done
+
+make
 

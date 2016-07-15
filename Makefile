@@ -34,13 +34,16 @@ all: make_disk.sh $(WRITE_DATA) $(UPDATE_DATA) | $(DISK) $(BOOT)
 	$(WRITE_DATA) $(BOOT) $(DISK) $(FAT_SEC)
 	$(UPDATE_DATA) $(DATALIST) $(WRITE_DATA) $(DISK)
 
-%.deps: %.asm
+include $(patsubst %.asm,$(DEPDIR)/%.deps,$(ASMSOURCES))
+include $(patsubst %.c,$(DEPDIR)/%.deps,$(CSOURCES))
+
+$(DEPDIR)/%.deps: %.asm
 	set -e; rm -f $@; \
 		$(ASM) -M -MQ $*.bin $(ASMFLAGS) $< > $@.$$$$; \
 		sed 's,\($*\)\.bin[ :]*,\1.bin $@ : ,g' < $@.$$$$ > $@; \
 		rm -f $@.$$$$
 
-%.deps: %.c
+$(DEPDIR)/%.deps: %.c
 	set -e; rm -f $@; \
 		$(CC) -MM $(CFLAGS) $< > $@.$$$$; \
 		sed 's,\($*\)\.o[ :]*,\1.o $@ : ,g' < $@.$$$$ > $@; \
@@ -51,11 +54,6 @@ $(BINDIR)/%.bin: $(SRCDIR)/%.asm
 
 $(EXEDIR)/%: $(SRCDIR)/%.c
 	$(CC) $(CFLAGS) $(CFLAGS_HOST) $< -o $@
-
-# $(DEPDIR)/%.deps: $(ASMSOURCES) $(CSOURCES)
-
-# include $(patsubst %.asm,$(DEPDIR)/%.deps,$(ASMSOURCES))
-# include $(patsubst %.c,$(DEPDIR)/%.deps,$(CSOURCES))
 
 $(DISK): $(BINDIR)/mbr.bin make_disk.sh $(WRITE_DATA)
 	./make_disk.sh $@ $(FAT_SEC)
@@ -72,10 +70,13 @@ $(BOOT): $(BINDIR)/vbr.bin $(BINDIR)/bootloader.bin $(WRITE_DATA)
 	touch $(DATADIR)/.newdisk -r $(DISK)
 
 clean:
-	-rm -fv $(BINDIR)/* $(EXEDIR)/* $(DEPDIR)/*
+	-rm -fv $(BINDIR)/* $(EXEDIR)/*
 
 diskclean: clean
 	-rm -fv $(IMGDIR)/*
+
+distclean: diskclean
+	-rm -rfv $(DEPDIR) $(BINDIR) $(EXEDIR) $(IMGDIR)
 
 qemu: all
 	qemu-system-i386 -drive file=$(DISK),index=0,media=disk
