@@ -2,6 +2,8 @@
 *.img
 *.bak
 *.bin
+*.o
+*.deps
 
 # Tools
 write_data

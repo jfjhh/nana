@@ -23,8 +23,8 @@
 
 vbr:
 
-%include "fat/bpb.inc"
-%include "fat/ebr.inc"
+%include "bpb.inc"
+%include "ebr.inc"
 
 ;;;;;;;; START CODE ;;;;;;;;
 
@@ -249,9 +249,9 @@ dap:				; disk address packet for int 0x13, ah=0x42
 
 ;;;;;;;; END DATA ;;;;;;;;
 
-vbrend:	times 510-($-$$) db 0	; fill remaining VBR with zeros
-%assign noppad $ - vbrend
-%warning INFO: %[noppad] bytes available in VBR.
+; vbrend:	times 510-($-$$) db 0	; fill remaining VBR with zeros
+; %assign noppad $ - vbrend
+; %warning INFO: %[noppad] bytes available in VBR.
 
 	db 0x55			; valid boot sector magic word
 	db 0xaa

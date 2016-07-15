@@ -1,5 +1,6 @@
-#!/bin/sh
+#!/bin/sh -x
 
+NEWDISK="data/.newdisk"
 LIST="$1"
 WRITE_DATA="$2"
 DISK="$3"
@@ -8,10 +9,10 @@ DISK="$3"
 	while read LINE; do
 		FILE="$(echo $LINE | cut -f 1 -d,)"
 		SECTOR="$(echo $LINE | cut -f 2 -d,)"
-		[ "$FILE" -nt "$DISK" -o -f ".newdisk" ] && [ -n "$SECTOR" ] \
+		[ "$FILE" -nt "$DISK" -o -f "$NEWDISK" ] && [ -n "$SECTOR" ] \
 			&& echo "Updating '$FILE'." \
-			&& ./$WRITE_DATA $FILE $DISK $SECTOR
+			&& $WRITE_DATA $FILE $DISK $SECTOR
 	done < "$LIST" >&2
 
-	[ -f ".newdisk" ] && rm ".newdisk" || true
+	[ -f "$NEWDISK" ] && rm "$NEWDISK" || true
 

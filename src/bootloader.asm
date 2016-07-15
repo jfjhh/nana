@@ -19,40 +19,90 @@
 [bits 16]
 [org 0x7e00]			; add to offsets
 
+;;;;;;;; START MACROS ;;;;;;;;
+
+; reserve a string, and add its length
+; params: label_name "string"
+; results: label_name: db "string" (with .len being its length)
+%macro dlstr 2+
+%1:	db %2
+%%end:
+.len:	equ %%end - %1
+%endmacro
+
+;;;;;;;; END MACROS ;;;;;;;;
+
 ;;;;;;;; START BOOTLOADER CODE ;;;;;;;;
+
+;;;;;;;; START MAIN CODE ;;;;;;;;
 
 start:
 	mov [ds:disk], dl	; save disk number
 	mov [ds:part], si	; save MBR partition offset
 
-; lowmem:	; lowmem detection
-; 	clc			; clear carry flag
-; 	int 0x12		; request low memory size
-; 	jc .err			; the carry flag is set if it failed
+lowmem:	; lowmem detection
+	clc			; clear carry flag
+	int 0x12		; request low memory size
+	jc error		; the carry flag is set if it failed
+	; ax is amount of contiguous memory in KB from 0
+	cmp ax, 0x027f		; need 640 KiB (0x27f)
+	jl error		; cannot boot without enough memory
 
-; 	; ax is amount of contiguous memory in KB from 0.
-; 	push ax
-; 	push word 1
-; 	call print_hex
-; 	add sp, 4		; size word + print word = 2 words = 4 bytes
-; 	jmp read
-
-; .err:	mov ah, 0x13		; write string
-; 	mov al, 00000001b	; update cursor, text only
-; 	xor bh, bh		; page 0
-; 	mov bl, errattr		; attribute
-; 	mov cx, lowmem_err.len	; length
-; 	mov dx, 0x0210		; row 2, col 16
-; 	mov bp, lowmem_err	; es:bp is string
-; 	int 0x10
-; 	jmp halt
-
-	; TODO: Check available video modes and skip splash if not supported
-	; set video mode
-video:	mov ax, 0x0013		; set video mode, 320x200 256-color VGA mode
+vbe:	; gather information on VBE video modes
+	mov di, vbeinfo.vbeoff	; the offset of the info block
+	mov word [es:di+0], 0x4256	; "VB" (little endian)
+	mov word [es:di+2], 0x3245	; "E2" (little endian)
+	mov ax, 0x4f00		; get VBE info, with "VBE2" set for VBE 2.0 info
 	int 0x10
+	jc error
+	cmp ax, 0x004f		; check success
+	je .load		; continue
+
+	push ax			; if not supported, show err code
+	push word 1
+	call print_hex
+	add sp, 1
+	jmp halt
+	
+	; load all the mode info
+.load:	mov si, [vbeinfo.modeptr]
+	mov di, vbeinfo.modeinfo
+
+	cld			; make sure DF is forwards
+.mode:	lodsw			; get the mode word [es:si]
+	cmp ax, 0xffff		; check for end of list word
+	je .end		; continue
+
+	mov cx, 128		; zero the entry (256 bytes long for VBE 3.0)
+.zero:	mov bx, cx
+	dec bx
+	shl bx, 1		; multiply by 2 because words
+	mov word [es:di+bx], 0
+	loop .zero
+
+	mov cx, ax		; make it the word
+	mov ax, 0x4f01		; get VBE mode info
+	int 0x10		; entry stored at [es:di]
+	jc error
+	cmp ax, 0x004f		; check success
+	jne .next		; just continue on if failed
+
+	; si already incremented by lodsw
+.next:	add di, 256		; offset to next entry
+	jmp .mode
+
+.end:
+	sub si, [vbeinfo.modeptr]
+	shr si, 1		; number of entries processed
+	dec si			; disregard lodsw increment
+
+	; draw the splash screen bitmap
+splash:	mov ax, 0x0013		; set video mode, 320x200 256-color VGA mode
+	int 0x10
+	jc error
 	mov ax, 0x0500		; set active display page, page to display
 	int 0x10
+	jc error
 
 	; clear and attribute screen with video memory manipulation
 	mov ax, 0xa000		; 0x000a0000 is video memory in VGA
@@ -76,8 +126,9 @@ video:	mov ax, 0x0013		; set video mode, 320x200 256-color VGA mode
 	mov dl, [ds:disk]	; some BIOSes trash dx, so read the num again
 	mov si, dap		; ds is 0, so ds:si is right disk address packet
 	int 0x13
+	jc error
 
-	; TODO: map each bit of the read bitmap to a byte in video memory
+	; map each bit of the read bitmap to a byte in video memory
 	; the bitmap goes from high to low, so bit 7 of the first byte is the
 	; first pixel in the image, and bit 0 of the first byte is the 8th pixel
 	; in the image
@@ -120,7 +171,6 @@ beep:
 	out 0x42, al		; set low byte of divisor
 	shr ax, 8
 	out 0x42, al		; set high byte of divisor
-	
 	in al, 0x61		; get the kbd controller byte
 	mov bl, al
 	or al, 0x03		; toggle bits 1 and 0 on
@@ -131,13 +181,12 @@ beep:
 	sti			; enable interrupts
 	xor ah, ah		; get keystroke (blocking)
 	int 0x16
+	jc error
 	in al, 0x61		; get the kbd controller byte
 	and al, 0xfc		; toggle bits 1 and 0 off
 	out 0x61, al		; set the PC speaker off
 
-	cli
-.halt:	hlt
-	jmp .halt
+	jmp halt
 
 	;
 	; TODO: go into protected mode and turn on A20 line to load more, higher
@@ -174,12 +223,44 @@ a20:	call detect_a20
 	; pop ds			; get back old segment
 	; sti			; interrupts ok
 
+;;;;;;;; END MAIN CODE ;;;;;;;;
+
+;;;;;;;; START ERROR CODE ;;;;;;;;
+
+okmsg:	mov ah, 0x13		; write string
+	mov al, 00000001b	; update cursor, text only
+	xor bh, bh		; page 0
+	mov bl, stdattr		; attribute
+	mov cx, general_ok.len	; length
+	mov dx, 0x0200 | (80-general_ok.len) / 2 ; row 2, centered col
+	mov bp, general_ok	; es:bp is string
+	int 0x10
+	jc error
+	jmp halt
+
+error:	mov ah, 0x13		; write string
+	mov al, 00000001b	; update cursor, text only
+	xor bh, bh		; page 0
+	mov bl, errattr		; attribute
+	mov cx, lowmem_err.len	; length
+	mov dx, 0x0300 | (80-lowmem_err.len) / 2 ; row 3, centered col
+	mov bp, lowmem_err	; es:bp is string
+	int 0x10
+	jmp halt
+
+halt:	cli
+.loop:	hlt
+	jmp .loop
+
+;;;;;;;; END ERROR CODE ;;;;;;;;
+
 ;;;;;;;; START EXTENDED SUBROUTINES ;;;;;;;;
 
 ; prints the first parameter number of words on stack in hex to the display
 print_hex:
 	push bp
 	mov bp, sp
+	pusha
 
 	mov cx, [bp+4]		; the size word parameter
 
@@ -196,24 +277,25 @@ print_hex:
 	mov cx, 4		; 4 hex digits to a word
 
 .digit:
-	rol   dx, 4      	; rotate so that low nybble of the byte is used
-	mov   ax, 0x0e0f	; ah is teletype output,
+	rol dx, 4		; rotate so that low nybble of the byte is used
+	mov ax, 0x0e0f		; ah is teletype output,
 				; al is mask for low nybble
-	and   al, dl		; get low nybble of dl in al
-	add   al, 0x90		; convert al to ASCII hex char
+	and al, dl		; get low nybble of dl in al
+	add al, 0x90		; convert al to ASCII hex char
 	daa			; uses "packed BCD addition," idk how
-	adc   al, 0x40
+	adc al, 0x40
 	daa
-	int   0x10
+	int 0x10
 
 	loop .digit
 
 	mov al, 0x20		; separate words with spaces
-	int   0x10
+	int 0x10
 
 	mov cx, di
 	loop .words
 
+	popa
 	pop bp
 	ret
 
@@ -253,12 +335,26 @@ detect_a20:
 
 ;;;;;;;; START EXTENDED DATA ;;;;;;;;
 
-disk:	db 0
-part:	dw 0
+dlstr general_ok, 0x02, " OK ", 0x02
+dlstr lowmem_err, "Not enough low memory! ", 0x02
+
+stdattr:	equ 0x0a	; text mode video attr for normal messages
+errattr:	equ 0x0c	; text mode video attr for error messages
+
+; lowmem_err:	db "Not enough low memory!"
+; .len:		equ $ - lowmem_err
+
+vbeinfo:
+.vbeoff:	equ 0x0700		; offset of VBE info block
+.modeptr:	equ .vbeoff + 0x0e	; where in the block the modes are
+.modeinfo:	equ .vbeoff + 512	; VBE 2.0 block is 512 bytes long
+
+disk:		db 0
+part:		dw 0
 
 gdtinfo:
-	dw gdt_end - gdt - 1	; last byte in table
-	dd gdt			; start of table
+.lastbyte	dw gdt_end - gdt - 1	; last byte in table
+.start		dd gdt			; start of table
 
 gdt:		dd 0,0		; entry 0 is always unused
 flatdesc:	db 0xff, 0xff, 0, 0, 0, 10010010b, 11001111b, 0
@@ -276,5 +372,4 @@ dap:				; disk address packet for int 0x13, ah=0x42
 	align 512		; fill remaining sector with nops
 
 ;;;;;;;; END BOOTLOADER CODE ;;;;;;;;
-
 

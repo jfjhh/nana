@@ -1,51 +1,87 @@
-CC=gcc
-CFLAGS_HOST+=-Wall -Werror -O2 -pedantic-errors -ansi
-CFLAGS=$(CFLAGS_HOST)
+IMGDIR       := out
+DATADIR      := data
+SRCDIR       := src
+BINDIR       := bin
+EXEDIR       := exe
+DEPDIR       := .deps
+INCDIRS      := include
+MODULES      := $(SRCDIR) $(DATADIR)
+ASMSOURCES   :=
+CSOURCES     :=
+EXECUTABLES  :=
+BINARIES     :=
+DATALIST     :=
+FAT_SEC      := 2048
+DISK         := $(IMGDIR)/disk.img
+BOOT         := $(IMGDIR)/boot.img
+VOLNAME      := "OSMomo Boot"
+UPDATE_DATA  :=
+WRITE_DATA   := $(EXEDIR)/write_data
+CC            = gcc
+CFLAGS_HOST  += -std=c11
+CFLAGS       += -Wall -Werror -O2 -pedantic-errors
+CFLAGS       += $(patsubst %,-I%/,$(MODULES))
+CFLAGS       += $(patsubst %,-I%/,$(INCDIRS))
+ASM           = nasm
+ASMFLAGS_BIN += -f bin
+ASMFLAGS     += -w+all
+ASMFLAGS     += $(patsubst %,-I%/,$(MODULES))
+ASMFLAGS     += $(patsubst %,-I%/,$(INCDIRS))
 
-ASM=nasm
-ASMFLAGS_BIN+=-f bin
-ASMFLAGS=$(ASMFLAGS_BIN)
+include $(patsubst %,%/module.mk,$(MODULES))
 
-FAT_SEC=2048
-DISK=disk.img
-BOOT=boot.img
-VOLNAME="OSMomo Boot"
+all: make_disk.sh $(WRITE_DATA) $(UPDATE_DATA) | $(DISK) $(BOOT)
+	$(WRITE_DATA) $(BOOT) $(DISK) $(FAT_SEC)
+	$(UPDATE_DATA) $(DATALIST) $(WRITE_DATA) $(DISK)
 
-all: nana
+%.deps: %.asm
+	set -e; rm -f $@; \
+		$(ASM) -M -MQ $*.bin $(ASMFLAGS) $< > $@.$$$$; \
+		sed 's,\($*\)\.bin[ :]*,\1.bin $@ : ,g' < $@.$$$$ > $@; \
+		rm -f $@.$$$$
 
-%.bin: %.asm
-	$(ASM) $(ASMFLAGS) $< -o $@
+%.deps: %.c
+	set -e; rm -f $@; \
+		$(CC) -MM $(CFLAGS) $< > $@.$$$$; \
+		sed 's,\($*\)\.o[ :]*,\1.o $@ : ,g' < $@.$$$$ > $@; \
+		rm -f $@.$$$$
 
-$(DISK): mbr.bin make_disk.sh write_data
+$(BINDIR)/%.bin: $(SRCDIR)/%.asm
+	$(ASM) $(ASMFLAGS) $(ASMFLAGS_BIN) $< -o $@
+
+$(EXEDIR)/%: $(SRCDIR)/%.c
+	$(CC) $(CFLAGS) $(CFLAGS_HOST) $< -o $@
+
+# $(DEPDIR)/%.deps: $(ASMSOURCES) $(CSOURCES)
+
+# include $(patsubst %.asm,$(DEPDIR)/%.deps,$(ASMSOURCES))
+# include $(patsubst %.c,$(DEPDIR)/%.deps,$(CSOURCES))
+
+$(DISK): $(BINDIR)/mbr.bin make_disk.sh $(WRITE_DATA)
 	./make_disk.sh $@ $(FAT_SEC)
-	./write_data mbr.bin $(DISK)
+	$(WRITE_DATA) $< $(DISK)
 
 # Write all sectors to the image, and then re-do the VBR with a BPT (mformat).
 # Strange dd values are for a zero'ed 1440-byte, 3.5-inch floppy.
-$(BOOT): vbr.bin bootloader.bin write_data
+$(BOOT): $(BINDIR)/vbr.bin $(BINDIR)/bootloader.bin $(WRITE_DATA)
 	dd if=/dev/zero of=$@ bs=96 count=15
-	./write_data $< $@ 0
+	$(WRITE_DATA) $< $@ 0
 	mformat -i $@ -v $(VOLNAME) -f 1440 -S 2 -H 18 -d 2 -r 512 -C -B $< ::
-	dd if=$@ bs=512 count=1 2> /dev/null | xxd
-	mcopy -i $@ bootloader.bin ::/BOOTMOMO.BIN
+	mcopy -i $@ $(BINDIR)/bootloader.bin ::/BOOTMOMO.BIN
 	mdir -i $@
-	touch data/.newdisk -r $(DISK)
-
-nana: make_disk.sh write_data | $(DISK) $(BOOT)
-	@./write_data $(BOOT) $(DISK) $(FAT_SEC)
-	@make -C data/ DISK=$(DISK)
+	touch $(DATADIR)/.newdisk -r $(DISK)
 
 clean:
-	rm *.bin write_data *.o 2> /dev/null; true
+	-rm -fv $(BINDIR)/* $(EXEDIR)/* $(DEPDIR)/*
 
 diskclean: clean
-	rm $(DISK) $(BOOT) 2> /dev/null; true
+	-rm -fv $(IMGDIR)/*
 
-qemu: nana
+qemu: all
 	qemu-system-i386 -drive file=$(DISK),index=0,media=disk
 
-bochs: nana bochsrc.txt
+bochs: all bochsrc.txt
 	bochs
 
-.PHONY: nana qemu bochs clean diskclean
+.PHONY: all qemu bochs clean diskclean
 
