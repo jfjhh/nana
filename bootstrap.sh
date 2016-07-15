@@ -1,10 +1,13 @@
 #!/bin/sh -x
 
-DIRS="bin bios data exe include out src"
+OUTDIRS="bin bios exe out obj"
+DEPDIRS="data src include"
 
-for DIR in $DIRS; do
-	mkdir -p $DIR .deps/$DIR
+for DIR in $OUTDIRS; do
+	mkdir -p $DIR
 done
 
-make
+for DIR in $DEPDIRS; do
+	mkdir -p .deps/$DIR
+done
 

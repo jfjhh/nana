@@ -3,13 +3,12 @@ DATADIR      := data
 SRCDIR       := src
 BINDIR       := bin
 EXEDIR       := exe
+OBJDIR       := obj
 DEPDIR       := .deps
 INCDIRS      := include
 MODULES      := $(SRCDIR) $(DATADIR)
 ASMSOURCES   :=
 CSOURCES     :=
-EXECUTABLES  :=
-BINARIES     :=
 DATALIST     :=
 FAT_SEC      := 2048
 DISK         := $(IMGDIR)/disk.img
@@ -17,6 +16,9 @@ BOOT         := $(IMGDIR)/boot.img
 VOLNAME      := "OSMomo Boot"
 UPDATE_DATA  :=
 WRITE_DATA   := $(EXEDIR)/write_data
+LD            = ld
+LDFLAGS_HOST :=
+LDFLAGS      :=
 CC            = gcc
 CFLAGS_HOST  += -std=c11
 CFLAGS       += -Wall -Werror -O2 -pedantic-errors
@@ -45,14 +47,17 @@ $(DEPDIR)/%.deps: %.asm
 
 $(DEPDIR)/%.deps: %.c
 	set -e; rm -f $@; \
-		$(CC) -MM $(CFLAGS) $< > $@.$$$$; \
+		$(CC) -MM $(CFLAGS) $(CFLAGS_HOST) $< > $@.$$$$; \
 		sed 's,\($*\)\.o[ :]*,\1.o $@ : ,g' < $@.$$$$ > $@; \
 		rm -f $@.$$$$
 
 $(BINDIR)/%.bin: $(SRCDIR)/%.asm
 	$(ASM) $(ASMFLAGS) $(ASMFLAGS_BIN) $< -o $@
 
-$(EXEDIR)/%: $(SRCDIR)/%.c
+$(OBJDIR)/%.o: $(SRCDIR)/%.c
+	$(CC) $(CFLAGS) $(CFLAGS_HOST) -c $< -o $@
+
+$(EXEDIR)/%: $(OBJDIR)/%.o
 	$(CC) $(CFLAGS) $(CFLAGS_HOST) $< -o $@
 
 $(DISK): $(BINDIR)/mbr.bin make_disk.sh $(WRITE_DATA)
@@ -70,19 +75,21 @@ $(BOOT): $(BINDIR)/vbr.bin $(BINDIR)/bootloader.bin $(WRITE_DATA)
 	touch $(DATADIR)/.newdisk -r $(DISK)
 
 clean:
-	-rm -fv $(BINDIR)/* $(EXEDIR)/*
+	-rm -fv $(BINDIR)/* $(EXEDIR)/* $(OBJDIR)/*
 
 diskclean: clean
 	-rm -fv $(IMGDIR)/*
 
 distclean: diskclean
-	-rm -rfv $(DEPDIR) $(BINDIR) $(EXEDIR) $(IMGDIR)
+	-rm -rfv $(DEPDIR) $(BINDIR) $(EXEDIR) $(IMGDIR) $(OBJDIR)
 
 qemu: all
 	qemu-system-i386 -drive file=$(DISK),index=0,media=disk
 
 bochs: all bochsrc.txt
 	bochs
+
+.PRECIOUS: $(OBJDIR)/%.o
 
 .PHONY: all qemu bochs clean diskclean
 
