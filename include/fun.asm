@@ -29,9 +29,9 @@ splash:	mov ax, 0x0013		; set video mode, 320x200 256-color VGA mode
 	mov es, ax		; set segment
 	mov bl, 0x3e		; as close as VGA can get to *the* top pink
 	mov cx, (320 * 200)	; pixels 640x480 vga video display
-.pink:	mov si, cx
+.fill:	mov si, cx
 	mov byte [es:0+si-1], bl	; write to video memory
-	loop .pink
+	loop .fill
 
 	; read in the splash screen bitmap
 	mov ax, 1024		; for now, from a hardcoded block
@@ -52,7 +52,6 @@ splash:	mov ax, 0x0013		; set video mode, 320x200 256-color VGA mode
 	; the bitmap goes from high to low, so bit 7 of the first byte is the
 	; first pixel in the image, and bit 0 of the first byte is the 8th pixel
 	; in the image
-	; mov bl, 0x54		; as close as VGA can get to *the* bottom pink
 	push ds
 	xor si, si		; zero si
 	mov ax, 0xa000		; video memory segment
@@ -64,7 +63,9 @@ splash:	mov ax, 0x0013		; set video mode, 320x200 256-color VGA mode
 	mov ah, al		; save byte
 
 	xor bx, bx		; index of bit in the byte
-.bit:	mov dl, 0x54		; default out byte is the bottom pink
+.bit:
+	; mov dl, 0x54		; as close as VGA can get to *the* bottom pink
+	mov dl, 0x00		; black
 	mov al, ah		; restore byte
 	and al, 10000000b	; check bit 7 (leftmost bit)
 	jz .nobit		; 0 means do not set the color
