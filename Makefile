@@ -1,56 +1,61 @@
-BUILDDIR     := $(CURDIR)
-IMGDIR       := $(BUILDDIR)/out
-DATADIR      := data
-SRCDIR       := src
-BINDIR       := $(BUILDDIR)/bin
-EXEDIR       := $(BUILDDIR)/exe
-OBJDIR       := $(BUILDDIR)/obj
+### VPATH Build ###
+ifeq (,$(filter _%,$(notdir $(CURDIR))))
+	include target.mk
+else
+	### VPATH Build ###
+
+include $(PROJDIR)/config.mk
+
+DATADIR      := $(PROJDIR)/data
+SRCDIR       := $(PROJDIR)/src
 INCDIRS      := include
-TARGDIRS     := $(IMGDIR) $(BINDIR) $(EXEDIR) $(OBJDIR)
+INCDIRS      := $(patsubst %,$(PROJDIR)/%,$(INCDIRS))
 MODULES      := $(SRCDIR) $(DATADIR)
+VPATH        := $(patsubst %,%:,$(MODULES) $(INCDIRS))
+
 ASMSOURCES   :=
 CSOURCES     :=
+
 DATALIST     :=
-FAT_SEC      := 2048
-DISK         := $(IMGDIR)/disk.img
-BOOT         := $(IMGDIR)/boot.img
-VOLNAME      := "OSMomo Boot"
 UPDATE_DATA  :=
-WRITE_DATA   := $(EXEDIR)/write_data
-MAKE_DISK    := ./make_disk.sh
+BOCHSRC      := bochsrc.txt
+BOCHSRC_IN   := $(PROJDIR)/bochsrc.txt.in
+WRITE_DATA   := ./write_data
+MAKE_DISK    := $(PROJDIR)/make_disk.sh
+
+FAT_SEC      := 2048
+DISK         := disk.img
+BOOT         := boot.img
+VOLNAME      := "OSMomo Boot"
+
 LD            = ld
 LDFLAGS_HOST :=
 LDFLAGS      :=
+
 CC            = gcc
 CFLAGS_HOST  += -std=c11
 CFLAGS       += -Wall -Werror -O2 -pedantic-errors
-CFLAGS       += $(patsubst %,-I%/,$(MODULES))
-CFLAGS       += $(patsubst %,-I%/,$(INCDIRS))
+CFLAGS       += $(patsubst %,-I%/,$(subst :, ,$(VPATH)))
+
 ASM           = nasm
 ASMFLAGS_BIN += -f bin
 ASMFLAGS     += -w+all
-ASMFLAGS     += $(patsubst %,-I%/,$(MODULES))
-ASMFLAGS     += $(patsubst %,-I%/,$(INCDIRS))
-VPATH        += $(SRCDIR)
+ASMFLAGS     += $(patsubst %,-I%/,$(subst :, ,$(VPATH)))
 
 include $(patsubst %,%/module.mk,$(MODULES))
 
-all: $(TARGDIRS) $(WRITE_DATA) $(UPDATE_DATA) | $(DISK) $(BOOT)
+all: $(WRITE_DATA) $(UPDATE_DATA) | $(DISK) $(BOOT)
 	set -e; \
 		$(WRITE_DATA) $(BOOT) $(DISK) $(FAT_SEC); \
-		$(UPDATE_DATA) $(DATALIST) $(WRITE_DATA) $(DISK); \
+		$(UPDATE_DATA) $(DATALIST) $(WRITE_DATA) $(DISK) $(DATADIR); \
 		printf "\033[0;1m"; \
-		printf "*** Disk image '$(DISK)' is up-to-date. ***\n"; \
-		printf "*** Use make {bochs,qemu} to emulate '$(DISK)'. ***\n"; \
+		printf "*** Disk image \`$(CURDIR)/$(DISK)\` is up-to-date. ***\n"; \
+		printf "*** Use \`make bochs\` or \`make qemu\` to emulate \`$(DISK)\`. ***\n"; \
+		printf "*** Use \`make drive [DRIVE=/dev/sdX]\` to image a drive (Default: \`$(DRIVE)\`). ***\n"; \
 		printf "\033[0m";
 
-$(TARGDIRS):
-	for DIR in $@; do \
-		[ -d $$DIR ] || mkdir -p $$DIR; \
-		done;
-
-include $(patsubst %.asm,.%.deps,$(ASMSOURCES))
-include $(patsubst %.c,.%.deps,$(CSOURCES))
+-include $(patsubst %.asm,.%.deps,$(ASMSOURCES))
+-include $(patsubst %.c,.%.deps,$(CSOURCES))
 
 .%.deps: %.asm
 	set -e; rm -f $@; \
@@ -64,54 +69,72 @@ include $(patsubst %.c,.%.deps,$(CSOURCES))
 		sed 's,\($*\)\.o[ :]*,\1.o $@ : ,g' < $@.$$$$ > $@; \
 		rm -f $@.$$$$
 
-$(BINDIR)/%.bin: %.asm
+%.bin: %.asm
 	$(ASM) $(ASMFLAGS) $(ASMFLAGS_BIN) $< -o $@
 
-$(OBJDIR)/%.o: %.c
+%.o: %.c
 	$(CC) $(CFLAGS) $(CFLAGS_HOST) -c $< -o $@
 
-$(EXEDIR)/%: $(OBJDIR)/%.o
+%: %.o
 	$(CC) $(CFLAGS) $(CFLAGS_HOST) $< -o $@
 
-$(DISK): $(BINDIR)/mbr.bin $(MAKE_DISK) $(WRITE_DATA)
+$(DISK): mbr.bin $(MAKE_DISK) $(WRITE_DATA)
 	set -e; \
 		$(MAKE_DISK) $@ $(FAT_SEC); \
 		$(WRITE_DATA) $< $(DISK);
 
 # Write all sectors to the image, and then re-do the VBR with a BPT (mformat).
 # Strange dd values are for a zero'ed 1440-byte, 3.5-inch floppy.
-$(BOOT): $(BINDIR)/vbr.bin $(BINDIR)/bootloader.bin $(WRITE_DATA)
+$(BOOT): vbr.bin bootloader.bin $(WRITE_DATA)
 	set -e; \
 		dd if=/dev/zero of=$@ bs=96 count=15; \
 		$(WRITE_DATA) $< $@ 0; \
 		mformat -i $@ -v $(VOLNAME) \
 		-f 1440 -S 2 -H 18 -d 2 -r 512 -C -B $< :: ; \
-		mcopy -i $@ $(BINDIR)/bootloader.bin ::/BOOTMOMO.BIN; \
+		mcopy -i $@ bootloader.bin ::/BOOTMOMO.BIN; \
 		mdir -i $@; \
-		touch $(DATADIR)/.newdisk -r $(DISK); \
+		touch .newdisk -r $(DISK); \
 
-clean:
-	-rm -fv $(BINDIR)/* $(EXEDIR)/* $(OBJDIR)/* *.deps
-
-diskclean: clean
-	-rm -fv $(IMGDIR)/*
-
-distclean: diskclean
-	-rm -rfv $(BINDIR) $(EXEDIR) $(IMGDIR) $(OBJDIR)
-	@printf "\033[0;1m"
-	@printf "*** You will need to run ./bootstrap.sh to build again. ***\n"
-	@printf "\033[0m"
+$(BOCHSRC): $(BOCHRC_IN)
+	set -e; \
+		cp $(BOCHSRC_IN) $(BOCHSRC); \
+		sed -i $(BOCHSRC) \
+		-e "s,@DISK@,$(DISK),g" \
+		-e "s,@PROJDIR@,$(PROJDIR),g";
 
 qemu: all
 	qemu-system-i386 -drive file=$(DISK),index=0,media=disk
 
-bochs: all bochsrc.txt
-	bochs
+bochs: $(BOCHSRC) all
+	bochs -qf $<
 
-print-%:
-	@echo $* = $($*)
+drive: all
+	set -e; \
+		if ! [ -b "$(DRIVE)" ]; then \
+		printf "\033[0;31m*** \`$(DRIVE)\` is not a block device! ***\033[0m\n"; \
+		exit 1; \
+		else \
+		printf "\033[0;1m*** This will overwrite all data on \`$(DRIVE)\`! ***\033[0m\n"; \
+		printf "\033[0;1m*** Are you sure you want to continue? [y/N]: \033[0m"; \
+		read ANSWER; \
+		if [ "$$ANSWER" = "y" ]; then \
+		printf "\033[0;34m"; \
+		if [ -x "$$(which pv)" ]; then \
+		dd if=$(DISK) | pv | sudo dd of=$(DRIVE) bs=1M; \
+		else \
+		sudo dd if=$(DISK) of=$(DRIVE) bs=1M; \
+		fi; \
+		sudo eject $(DRIVE); \
+		printf "\n\033[0;32m*** \`$(DRIVE)\` was imaged. ***\033[0m\n"; \
+		else \
+		printf "\033[0;31m*** Cancelled. ***\033[0m\n"; \
+		fi; \
+		fi;
+	@printf "\033[0m"
 
-.PRECIOUS: $(OBJDIR)/%.o
+.PRECIOUS: %.o
 
-.PHONY: all qemu bochs clean diskclean distclean $(BINDIR)
+.PHONY: all qemu bochs drive
+
+endif ### VPATH Build ###
 

@@ -5,9 +5,12 @@
 *.o
 *.deps
 
-# Tools
-write_data
-
 # Data
 !data/*.bin
+
+# Configuration
+config.mk
+
+# Builds
+_nana*
 
