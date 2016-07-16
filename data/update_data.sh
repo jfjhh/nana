@@ -1,9 +1,11 @@
-#!/bin/sh -x
+#!/bin/sh -xv
 
 NEWDISK="data/.newdisk"
 LIST="$1"
-WRITE_DATA="$2"
-DISK="$3"
+shift
+WRITE_DATA="$1"
+shift
+DISK="$1"
 
 [ -f "$LIST" -a -x "$WRITE_DATA" -a -w "$DISK"  ] && \
 	while read LINE; do

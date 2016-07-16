@@ -1,3 +1,3 @@
-ASMSOURCES  += $(wildcard $(SRCDIR)/*.asm)
-CSOURCES    += $(wildcard $(SRCDIR)/*.c)
+ASMSOURCES  += $(notdir $(wildcard $(SRCDIR)/*.asm))
+CSOURCES    += $(notdir $(wildcard $(SRCDIR)/*.c))
 
