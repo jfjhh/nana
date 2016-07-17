@@ -39,14 +39,21 @@ dlstr splash_err,	0x04, " Could not show the splash screen ", 0x04
 stdattr:	equ 0x0a	; text mode video attr for normal messages
 errattr:	equ 0x0c	; text mode video attr for error messages
 
-; memory location of the loaded splash image bitmap
-splashaddr:	equ 0x400
+; LBA on disk of the splash image bitmap
+splashinfo:	; memory used will be overwritable after calling nana_splash
+.lba:		equ 0x400	; LBA of bitmap (8K in size)
+.off:		equ 0x5000	; load high as possible, below 0x7c00
+.seg:		equ .off >> 4	; as a segment value, for convenience
 
 ; VBE information structure
 vbeinfo:
 .vbeoff:	equ 0x0700		; offset of VBE info block
 .modeptr:	equ .vbeoff + 0x0e	; where in the block the modes are
-.modeinfo:	equ .vbeoff + 512	; VBE 2.0 block is 512 bytes long
+.modeinfo:	equ .vbeoff + 0x200	; VBE 2.0 block is 512 bytes long
+
+; system memory map information structure
+mmap:		; leaves space for 0x47 VBE entries after block
+.off		equ vbeinfo.modeinfo + 0x4700
 
 ; GDT descriptor structure
 gdtinfo:
@@ -62,13 +69,26 @@ gdt_end:
 dap:				; disk address packet for int 0x13, ah=0x42
 .size:		db 0x10		; size: 0x10
 .reserved:	db 0x00		; reserved byte (0x00)
-.blocks:	dw 0x0010	; blocks to transfer (8K)
+.blocks:	dw 0x0010	; blocks to transfer (8K for splash bitmap)
 .transbuf:	dd 0x00000000	; segment 0x0000, offset 0x0000
 .startblk:	dq 0		; starting absolute block number
 
-; boot disk and partition, to be preserved for the kernel
+; information on the boot disk number and partition
+diskinfo:
 disk:		db 0
 part:		dw 0
+
+; kernel information table (should be passed to kernel or known at compile time)
+; entry: 4-byte key string and 16-bit offset (from 0)
+kinfo:
+.disk:		db "DISK"
+		dw diskinfo
+.mmap:		db "MMAP"
+		dw mmap.off
+.vbe:		dw "VBE#"
+		dw vbeinfo.modeinfo
+.end:		dq 0
+		dw 0
 
 ;;;;;;;; END DATA ;;;;;;;;
 
@@ -143,13 +163,13 @@ vbe:	; gather information on VBE video modes
 a20:
 	call detect_a20		; check if already enabled by the BIOS
 	or ax, ax
-	jnz pmode
+	jnz splash
 
 	mov ax, 0x2401		; try to enable with the BIOS function
 	int 0x15
 	call detect_a20
 	or ax, ax
-	jnz pmode
+	jnz splash
 
 	cli			; try with the keyboard contoller method
 	call a20wait.a
@@ -183,7 +203,7 @@ a20:
 	mov cx, 32		; check this many times
 .kbdlp:	call detect_a20	
 	or ax, ax
-	jnz pmode
+	jnz splash
 	mov dx, cx
 	mov cx, 128
 .kbdwt:	nop
@@ -201,7 +221,7 @@ a20:
 .end:	mov cx, 32		; check this many times
 .fastl:	call detect_a20	
 	or ax, ax
-	jnz pmode
+	jnz splash
 	mov dx, cx
 	mov cx, 128
 .fastw:	nop
@@ -212,26 +232,50 @@ a20:
 	; could not enable A20: give up!
 .err:	center_msg_h errattr, a20_err
 
-	;
-	; TODO: go into protected mode
-	; TODO: int 0x15, ax = 0xe820 advanced memory detection.
-	; TODO: proper GDT and IDT
-	; TODO: paging now (in bootloader), or in kernel?
-	;
-
-; setup protected mode
-pmode:
-	call splash             ; show the splash screen while still possible
+splash:
+	call nana_splash	; show the splash screen while still possible
 
 	mov bx, 196		; frequency of G3, musical note
 	call beep		; why not beep annoyingly?
 
-	cli
+	;
+	; TODO: int 0x15, ax = 0xe820 advanced memory detection.
+	; TODO: proper GDT and IDT
+	; TODO: paging now (in bootloader), or in kernel?
+	; TODO: load kernel and other resources from disk and run kernel
+	;
+
+; setup protected mode
+pmode:
+	cli			; clear interrupts until kernel sets up an IDT
+	in al, 0x70		; disable NMIs
+	or al, 1<<7
+	out 0x70, al
 	lgdt [gdtinfo]		; load gdt
 	mov eax, cr0		; switch to pmode by setting pmode bit
 	or al, 1<<0
 	mov cr0, eax
 	jmp $ + 2		; tell 386/486 to not crash
+
+; detect all memory with BIOS int 0x15, ax=0xe820
+;
+; <http://wiki.osdev.org/Detecting_Memory_%28x86%29#Getting_an_E820_Memory_Map>
+; <http://wiki.osdev.org/Detecting_Memory_%28x86%29#Other_Methods>
+;
+; TODO: alternate support for if e820 is not supported:
+; before pmode, check e820 support: if not supported, use e881 (extended
+; register version of e801): handles only mem. above 16M to the 2nd mem. hole.
+; da88 is similar to e881, so maybe try that, too, if e881 fails.
+; if that fails, then mess around with ah=0x{88,8a,7c}.
+; last resort: cmos and assume mem. hole at 15 MiB.
+; if that fails or reports too little memory, then error message and weep.
+memmap:
+	; mov di, mmap.off	; [es:di] is offset of memory map
+	; mov eax, 0xe820		; get system memory map
+	; xor ebx, ebx		; start at beginning of map
+	; mov ecx, 24		; size of result buffer (24 for ACPI 3.X compat)
+	; mov edx, "SMAP"		; magic word
+	; int 0x15
 
 	; mov ax, 0x10		; select descriptor 1 (data descriptor)
 	; mov ds, ax
@@ -385,9 +429,9 @@ detect_a20:
 ;
 ; draw the splash screen bitmap
 ; 
-; splashaddr must be set
+; splashinfo (see data section above) must be set
 ;
-splash:
+nana_splash:
 	mov ax, 0x0013		; set video mode, 320x200 256-color VGA mode
 	int 0x10
 	jc .err
@@ -405,11 +449,11 @@ splash:
 	loop .fill
 
 	; read in the splash screen bitmap
-	mov ax, splashaddr		; for now, from a hardcoded block
+	mov ax, splashinfo.lba	; for now, from a hardcoded block
 	mov [dap.startblk], ax
 	xor ax, ax
 	mov [dap.startblk+2], ax
-	mov ax, 0x2000
+	mov ax, splashinfo.off
 	mov [dap.transbuf], ax
 	xor ax, ax
 	mov [dap.transbuf+2], ax
@@ -427,7 +471,7 @@ splash:
 	xor si, si		; zero si
 	mov ax, 0xa000		; video memory segment
 	mov es, ax		; set segment for video mem writes
-	mov ax, 0x0200		; loaded bitmap memory location (segment)
+	mov ax, splashinfo.seg	; loaded bitmap memory location
 	mov ds, ax		; set segment for lodsb
 
 .bmp:	lodsb			; load the byte at [ds:si] into al
@@ -435,7 +479,6 @@ splash:
 
 	xor bx, bx		; index of bit in the byte
 .bit:
-	; mov dl, 0x54		; as close as VGA can get to *the* bottom pink
 	mov dl, 0x00		; black
 	mov al, ah		; restore byte
 	and al, 10000000b	; check bit 7 (leftmost bit)
