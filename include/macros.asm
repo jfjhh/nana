@@ -27,5 +27,20 @@
 .len:	equ %%end - %1
 %endmacro
 
+; print a message, but centered on the screen
+%macro center_msg 2
+	mov bl, %1		; the attribute
+	mov cx, %2.len		; the string length of a dlstr'd string
+	mov dx, 0x02 | (80 - %2.len) / 2	; row 2, center the string
+	mov bp, %2
+	call msg
+%endmacro
+
+; do the message, but halt after
+%macro center_msg_h 2
+	center_msg %1, %2
+	jmp halt
+%endmacro
+
 ;;;;;;;; END MACROS ;;;;;;;;
 
