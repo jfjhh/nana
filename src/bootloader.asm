@@ -16,6 +16,10 @@
 ; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ;
 
+;
+; TODO: load kernel and other resources from disk and run kernel
+;
+
 [bits 16]
 [org 0x7e00]			; add to offsets
 
@@ -34,6 +38,7 @@ dlstr lowmem_err,	0x01, " Not enough low memory ", 0x01
 dlstr vbe_err,		0x02, " Could not get VBE info ", 0x02
 dlstr a20_err,		0x03, " Could not enable the A20 line ", 0x03
 dlstr splash_err,	0x04, " Could not show the splash screen ", 0x04
+dlstr mmap_err,		0x05, " Could not create system memory map ", 0x05
 
 ; text mode attributes
 stdattr:	equ 0x0a	; text mode video attr for normal messages
@@ -42,8 +47,10 @@ errattr:	equ 0x0c	; text mode video attr for error messages
 ; LBA on disk of the splash image bitmap
 splashinfo:	; memory used will be overwritable after calling nana_splash
 .lba:		equ 0x400	; LBA of bitmap (8K in size)
-.off:		equ 0x5000	; load high as possible, below 0x7c00
+.off:		equ 0x5000	; load high as possible, below bootloader
 .seg:		equ .off >> 4	; as a segment value, for convenience
+.lfbseg:	equ 0xa000	; the linear frame buffer segment (real mode)
+.mode:		equ 0x13	; the video mode for int 0x10
 
 ; VBE information structure
 vbeinfo:
@@ -53,16 +60,24 @@ vbeinfo:
 
 ; system memory map information structure
 mmap:		; leaves space for 0x47 VBE entries after block
-.off		equ vbeinfo.modeinfo + 0x4700
+.count:		db 0		; number of entries
+.off:		equ vbeinfo.modeinfo + 0x4700
 
 ; GDT descriptor structure
 gdtinfo:
-.lastbyte	dw gdt_end - gdt - 1	; last byte in table
-.start		dd gdt			; start of table
+.lastbyte:	dw gdt_end - gdt - 1	; last byte in table
+.start:		dd gdt			; start of table
+		dw 0			; high 2 bytes of location are 0
 
 ; temporary GDT before kernel creates its own
-gdt:		dd 0,0		; entry 0 is always unused
-flatdesc:	db 0xff, 0xff, 0, 0, 0, 10010010b, 11001111b, 0
+gdt:
+.nulldesc:	dd 0		; bytes 0-3 of gdt location: bits 0-31
+		dd 0		; bytes 4-5 of gdt location: bits 48-63
+.dpl0code:	db 0xff, 0xff, 0, 0, 0, 10011010b, 11001111b, 0
+.dpl0data:	db 0xff, 0xff, 0, 0, 0, 10010010b, 11001111b, 0
+.dpl3code:	db 0xff, 0xff, 0, 0, 0, 11111010b, 11001111b, 0
+.dpl3data:	db 0xff, 0xff, 0, 0, 0, 11110010b, 11001111b, 0
+.extra:		times 4 dq 0
 gdt_end:
 
 ; Disk Address Packet for reading from the boot disk
@@ -84,7 +99,7 @@ kinfo:
 .disk:		db "DISK"
 		dw diskinfo
 .mmap:		db "MMAP"
-		dw mmap.off
+		dw mmap
 .vbe:		dw "VBE#"
 		dw vbeinfo.modeinfo
 .end:		dq 0
@@ -104,12 +119,16 @@ lowmem:	; lowmem detection
 	clc			; clear carry flag
 	int 0x12		; request low memory size
 	jc .err			; the carry flag is set if it failed
-	; ax is amount of contiguous memory in KB from 0
-	cmp ax, 0x027f		; need 640 KiB (0x27f)
+	; ax is amount of contiguous memory in KB from 0 (max: 0x27f)
+	cmp ax, 0x40		; need at least 64 KiB low mem. to load things
 	jl .err			; cannot boot without enough memory
 	jmp vbe
 
-.err:	center_msg_h errattr, lowmem_err
+.err:	push ax			; print found memory, for user to see
+	push word 1
+	call print_hex
+	add sp, 4
+	center_msg_h errattr, lowmem_err
 
 vbe:	; gather information on VBE video modes
 	mov di, vbeinfo.vbeoff	; the offset of the info block
@@ -163,13 +182,13 @@ vbe:	; gather information on VBE video modes
 a20:
 	call detect_a20		; check if already enabled by the BIOS
 	or ax, ax
-	jnz splash
+	jnz memmap
 
 	mov ax, 0x2401		; try to enable with the BIOS function
 	int 0x15
 	call detect_a20
 	or ax, ax
-	jnz splash
+	jnz memmap
 
 	cli			; try with the keyboard contoller method
 	call a20wait.a
@@ -203,7 +222,7 @@ a20:
 	mov cx, 32		; check this many times
 .kbdlp:	call detect_a20	
 	or ax, ax
-	jnz splash
+	jnz memmap
 	mov dx, cx
 	mov cx, 128
 .kbdwt:	nop
@@ -221,7 +240,7 @@ a20:
 .end:	mov cx, 32		; check this many times
 .fastl:	call detect_a20	
 	or ax, ax
-	jnz splash
+	jnz memmap
 	mov dx, cx
 	mov cx, 128
 .fastw:	nop
@@ -232,65 +251,245 @@ a20:
 	; could not enable A20: give up!
 .err:	center_msg_h errattr, a20_err
 
+; create a system memory map, in the format of an int 0x15, ax=0xe820 map,
+; even if e820 is not available (uses other functions and reformats results)
+memmap:	; all e820-style entries use 24-byte ACPI 3.X-compatible entries
+.e820:	mov di, mmap.off	; [es:di] is offset of memory map
+	mov [es:di+20], dword 1	; force a valid ACPI 3.X entry
+	mov eax, 0xe820		; get e820 system memory map
+	xor ebx, ebx		; start at beginning of map
+	mov ecx, 24		; size of result buffer (24 for ACPI 3.X compat)
+	mov edx, 0x0534d4150	; magic number: ASCII "SMAP"
+	int 0x15
+	jc .e801
+	cmp eax, 0x0534d4150
+	jne .e801
+	test ebx, ebx		; a one-entry list is useless
+	je .e801
+	jmp .entry		; e820 is supported
+.next:	mov eax, 0xe820		; eax and ecx get trashed on every int 0x15 call
+	mov [es:di + 20], dword 1	; force a valid ACPI 3.X entry
+	mov ecx, 24		; ask for 24 bytes again
+	int 0x15
+	jc short .end		; carry set: "end of list already reached"
+	mov edx, 0x0534D4150	; fix potentially trashed register
+.entry:	jcxz .empty		; skip empty entries
+	cmp cl, 20		; 24-byte ACPI 3.X response?
+	jbe short .noext
+	test byte [es:di + 20], 1<<0	; ACPI 3.X "ignore this data" bit?
+	je .empty
+.noext:	mov ecx, [es:di + 8]	; get lower uint32_t of memory region length
+	or ecx, [es:di + 12]	; OR with upper uint32_t to test for zero
+	jz .empty		; if length uint64_t is 0, skip entry
+	inc byte [mmap.count]	; got a good entry: go to next entry
+	add di, 24		; offset
+.empty:	test ebx, ebx		; if ebx resets to 0, at end of list
+	jne short .next
+	mov dword [es:di],    0	; null entry at end
+	mov dword [es:di+4],  0
+	mov dword [es:di+8],  0
+	mov dword [es:di+12], 0
+.end:	clc			; fix CF set as end of list
+	jmp .ok
+
+.e801:	mov ax, 0xe801		; get memory for >64 MiB configurations
+	xor cx, cx		; zero to be able to check if changed
+	xor dx, dx
+	xor eax, eax		; for setting entry values later
+	xor ebx, ebx
+	xor edx, edx
+	int 0x15
+	jc .da88
+	cmp ah, 0x86		; unsupported command
+	je .da88
+	cmp ah, 0x80		; invalid command
+	je .da88
+	jcxz .axbx		; if cx and dx are zero, ax and bx
+	mov ax, cx
+	mov bx, dx
+.axbx:	test ax, bx		; check these are not zero, either
+	jz .da88
+	jmp .to16e820
+
+.da88:	stc
+	mov ax, 0xda88		; get extended memory size
+	int 0x15
+	jc .ah88
+	mov ax, bx		; amount is in cl:bx
+	xor edx, edx
+	mov dl, cl		; amount is now in dx:ax
+	jmp .toe820
+
+.ah88:	mov ah, 0x88		; get extended memory size (286+)
+	clc			; get around CF bug in some BIOSes
+	int 0x15
+	jc .ah8a
+	xor edx, edx		; ax:dx is value
+	jmp .toe820
+
+.ah8a:	xor al, al
+	xor dx, dx
+	mov ah, 0x8a		; get big memory size
+	mov bx, ax		; copy value
+	test bx, dx		; not zero if any 1-bits in dx:ax
+	jz .ahc7
+	jmp .toe820
+
+.ahc7:	mov ah, 0xc0		; get configuration: IBM ah=c7 memory map
+	int 0x15		; (XT >1986/1/10,AT mdl 3x9,CONV,XT286,PS)
+	jc .cmos
+	test ah, ah		; check for success
+	jnz .cmos
+	test byte [es:bx+0x06], 1<<4	; test bit 4 of feature byte 2
+	jz .cmos		; if not set, 0xc7 is not supported
+	mov ah, 0xc7		; return memory-map information (IBM)
+	mov si, mmap.off	; [ds:si] is offset of memory map
+	int 0x15
+	jc .cmos
+	cmp word [ds:si], 66	; mimimum size of IBM c7 map
+	jl .cmos
+
+	; convert IBM ah=c7 mem. map to an e820 mem. map
+	mov dword [ds:si+0x0a], eax	; 01 MiB - 16 MiB (1 KiB blocks)
+	mov dword [ds:si+0x0e], ebx	; 16 MiB - 04 GiB (1 KiB blocks)
+
+	mov dword [mmap.off+0x00], 0x00100000	; start of extended memory
+	mov dword [mmap.off+0x04], 0
+	shld dword [mmap.off+0x08], eax, 42	; all of eax, plus 10 for KiB=>B
+	mov dword [mmap.off+0x10], 1	; usable memory type
+	inc byte [mmap.count]
+
+	mov dword [mmap.off+0x18], 0x01000000	; start of 16 MiB
+	mov dword [mmap.off+0x1c], 0
+	shld dword [mmap.off+0x20], ebx, 42	; all of eax, plus 10 for KiB=>B
+	mov dword [mmap.off+0x28], 1	; usable memory type
+	inc byte [mmap.count]
+
+	mov dword [mmap.off+0x30], 0	; 24-byte null entry (map end)
+	mov dword [mmap.off+0x38], 0
+	mov word  [mmap.off+0x3c], 0
+	jmp .ok
+
+.cmos:	cli			; read memory information from CMOS
+	xor eax, eax
+	mov al, 0x30
+	out 0x70, al		; read low byte of extended mem.
+	in al, 0x71
+	mov bl, al
+	mov al, 0x31
+	out 0x70, al		; read high byte of extended mem.
+	in al, 0x71
+	mov ah, al
+	mov al, bl
+	sti			; ax is now the amount of extended mem. in KiB
+	xor dx, dx		; now dx:ax is the amount
+	test ax, ax
+	jz .err
+	jmp .toe820
+
+.to16e820: ; 2nd e820 entry (offsets are entry offset + 24)
+	; turn amount above 16 MiB (bs=64KiB) an e820 entry (blocks in dx:bx)
+	mov dword [mmap.off+0x18], 0x01000000	; start of 16 MiB
+	mov dword [mmap.off+0x1c], 0
+	shl ebx, 16		; move low word to be high word for shld
+	shld dword [mmap.off+0x20], ebx, 32	; all of bx, plus 16 for 64K=>B
+	shl edx, 16		; move low word to be high word for shld
+	shld dword [mmap.off+0x24], edx, 32	; all of dx, plus 16 for 64K=>B
+	mov dword [mmap.off+0x28], 1	; usable memory type
+	mov dword [mmap.off+0x30], 0	; 24-byte null entry (map end)
+	mov dword [mmap.off+0x38], 0
+	mov word  [mmap.off+0x3c], 0
+	inc byte [mmap.count]
+
+.toe820: ; 1st e820 entry
+	; turn extended KiB into an e820 entry (KiB in dx:ax)
+	mov dword [mmap.off+0x00], 0x00100000	; start of extended memory
+	mov dword [mmap.off+0x04], 0
+	shl eax, 16		; move low word to be high word for shld
+	shld dword [mmap.off+0x08], eax, 26	; all of ax, plus 10 for KiB=>B
+	shl edx, 16		; move low word to be high word for shld
+	shld dword [mmap.off+0x0c], edx, 26	; all of dx, plus 10 for KiB=>B
+	cmp byte [mmap.count], 0	; check if an entry after this exists
+	jnz .ok
+	mov dword [mmap.off+0x10], 1	; usable memory type
+	mov dword [mmap.off+0x18], 0	; 24-byte null entry (map end)
+	mov dword [mmap.off+0x20], 0
+	mov word  [mmap.off+0x24], 0
+	inc byte [mmap.count]
+	jmp .ok
+
+.err:	center_msg_h errattr, mmap_err
+
+.ok:
+
 splash:
 	call nana_splash	; show the splash screen while still possible
 
-	mov bx, 196		; frequency of G3, musical note
-	call beep		; why not beep annoyingly?
-
-	;
-	; TODO: int 0x15, ax = 0xe820 advanced memory detection.
-	; TODO: proper GDT and IDT
-	; TODO: paging now (in bootloader), or in kernel?
-	; TODO: load kernel and other resources from disk and run kernel
-	;
+	; play some block chords
+	; (about until monitor switches modes, making everything seem smoother)
+	; mov bx, 165
+	; call beep
+	; mov bx, 196
+	; call beep
+	; mov bx, 247
+	; call beep
+	; mov bx, 147
+	; call beep
+	; mov bx, 196
+	; call beep
+	; mov bx, 247
+	; call beep
+	; mov bx, 131
+	; call beep
+	; mov bx, 165
+	; call beep
+	; mov bx, 196
+	; call beep
+	; mov bx, 147
+	; call beep
+	; mov bx, 185
+	; call beep
+	; mov bx, 220
+	; call beep
+	; mov bx, 392
+	; call beep
+	; mov bx, 494
+	; call beep
+	; mov bx, 587
+	; call beep
 
 ; setup protected mode
 pmode:
-	cli			; clear interrupts until kernel sets up an IDT
+	jmp halt
+	cli			; clear interrupts
 	in al, 0x70		; disable NMIs
 	or al, 1<<7
 	out 0x70, al
+
+	; set null descriptor to have the GDT's location
+	mov ax, word [gdtinfo.start]
+	mov word [gdt], ax
+	mov ax, word [gdtinfo.start+2]
+	mov word [gdt+2], ax
+	mov ax, word [gdtinfo.start+2]
+	mov word [gdt+6], ax
+
 	lgdt [gdtinfo]		; load gdt
 	mov eax, cr0		; switch to pmode by setting pmode bit
 	or al, 1<<0
 	mov cr0, eax
 	jmp $ + 2		; tell 386/486 to not crash
+	sti			; set interrupts
 
-; detect all memory with BIOS int 0x15, ax=0xe820
-;
-; <http://wiki.osdev.org/Detecting_Memory_%28x86%29#Getting_an_E820_Memory_Map>
-; <http://wiki.osdev.org/Detecting_Memory_%28x86%29#Other_Methods>
-;
-; TODO: alternate support for if e820 is not supported:
-; before pmode, check e820 support: if not supported, use e881 (extended
-; register version of e801): handles only mem. above 16M to the 2nd mem. hole.
-; da88 is similar to e881, so maybe try that, too, if e881 fails.
-; if that fails, then mess around with ah=0x{88,8a,7c}.
-; last resort: cmos and assume mem. hole at 15 MiB.
-; if that fails or reports too little memory, then error message and weep.
-memmap:
-	; mov di, mmap.off	; [es:di] is offset of memory map
-	; mov eax, 0xe820		; get system memory map
-	; xor ebx, ebx		; start at beginning of map
-	; mov ecx, 24		; size of result buffer (24 for ACPI 3.X compat)
-	; mov edx, "SMAP"		; magic word
-	; int 0x15
-
-	; mov ax, 0x10		; select descriptor 1 (data descriptor)
-	; mov ds, ax
-	; mov es, ax
-	; mov fs, ax
-	; mov gs, ax
-	; mov ss, ax
-
-	; jmp 0x08:0x1000		; set code descriptor, jump to kernel
-
-	; and al, 0xfe		; back to realmode...
-	; mov cr0, eax		; by toggling bit again
-
-	; pop ds			; get back old segment
-	; sti			; interrupts ok
+	; setup segments
+	mov ax, 0x02<<3	; select descriptor 2 (data descriptor)
+	mov ds, ax
+	mov es, ax
+	mov fs, ax
+	mov gs, ax
+	mov ss, ax
+	jmp 0x01<<3:.setcs	; update cs to be descriptor 1 (code descriptor)
+.setcs:
 
 	jmp halt
 
@@ -429,21 +628,30 @@ detect_a20:
 ;
 ; draw the splash screen bitmap
 ; 
-; splashinfo (see data section above) must be set
+; splashinfo (see data section above) must be set by the VBE detection code
 ;
 nana_splash:
-	mov ax, 0x0013		; set video mode, 320x200 256-color VGA mode
+	push es
+	push ds
+
+	mov ax, splashinfo.mode	; set video mode
 	int 0x10
 	jc .err
 	mov ax, 0x0500		; set active display page, page to display
 	int 0x10
 	jc .err
 
-	; clear and attribute screen with video memory manipulation
-	mov ax, 0xa000		; 0x000a0000 is video memory in VGA
+	mov ax, splashinfo.lfbseg	; video memory linear framebuffer
 	mov es, ax		; set segment
+
+	mov ah, 0x0b		; set background color
+	xor bh, bh
 	mov bl, 0x3e		; as close as VGA can get to *the* top pink
-	mov cx, (320 * 200)	; pixels 640x480 vga video display
+	int 0x10
+
+	; clear and attribute screen with video memory manipulation
+	mov bl, 0x3e		; as close as VGA can get to *the* top pink
+	mov cx, (320 * 200)	; pixels 320x200 vga video display
 .fill:	mov si, cx
 	mov byte [es:0+si-1], bl	; write to video memory
 	loop .fill
@@ -467,12 +675,11 @@ nana_splash:
 	; the bitmap goes from high to low, so bit 7 of the first byte is the
 	; first pixel in the image, and bit 0 of the first byte is the 8th pixel
 	; in the image
-	push ds
 	xor si, si		; zero si
-	mov ax, 0xa000		; video memory segment
-	mov es, ax		; set segment for video mem writes
 	mov ax, splashinfo.seg	; loaded bitmap memory location
 	mov ds, ax		; set segment for lodsb
+
+	xchg bx, bx		; Bochs magic breakpoint
 
 .bmp:	lodsb			; load the byte at [ds:si] into al
 	mov ah, al		; save byte
@@ -495,9 +702,11 @@ nana_splash:
 	cmp si, (320 * 200) / 8	; size of bitmap (in bytes)
 	jb .bmp
 	pop ds
+	pop es
 	ret
 
-.err:	center_msg_h errattr, splash_err
+.err:	center_msg errattr, splash_err
+	ret
 
 ;
 ; "utilize" the PC speaker (piezotransducer) to produce a frequency (forever)
@@ -514,19 +723,19 @@ beep:
 	; do bounds check on frequency, and choose the closest possible if
 	; it is out of the possible range of frequencies:
 	; because mode 3 is used for the PIT, a divisor of 1 cannot be used
-	mov ax, 0x10000		; ax == slowest possible frequency (65536)
+	mov ax, 0xffff		; ax == slowest possible frequency (65535)
 	cmp bx, 18		; is the requested frequency too low?
 	jbe .pit		; yes, use slowest possible frequency
 
 	mov ax, 2		; ax == fastest possible frequency (2)
-	cmp bx, 1193181 - 1	; is the requested frequency too high?
+	cmp bx, 0xffff		; is the requested frequency too high?
 	jae .pit		; yes, use fastest possible frequency
 
 	; to get the PIT frequency, divide 14.31818 MHz by freq and by 3
 	mov ax, 0x9e99		; the above frequency, divided by 4 (err free):
 	mov dx, 0x0036		; dx:ax == 3579545
 	div bx			; ax == 3579545 / frequency, dx == remainder
-	cmp dx, 3579545 / 2	; is the remainder more than half?
+	cmp dx, 0xffff		; is the remainder more than half?
 	jb .close		; no, round down
 	inc ax			; yes, round up
 
@@ -555,7 +764,7 @@ beep:
 .end:	; speaker is beeping and will stop on keypress:
 	sti			; enable interrupts
 
-	mov cx, 0x1000
+	mov cx, 0x0800
 .waita:	push cx			; do lots of memory access for a hacky sleep
 	xor cx, cx
 	not cx
@@ -582,6 +791,9 @@ halt:	cli
 	jmp .loop
 
 ;;;;;;;; END SUBROUTINES ;;;;;;;;
+
+; endpad:	times 0x1200 - ($ - $$) db 0	; page-align in mem. 0x(7e00+200==8000)
+; end:
 
 ;;;;;;;; END BOOTLOADER CODE ;;;;;;;;
 
