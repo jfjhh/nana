@@ -39,7 +39,7 @@ CFLAGS       += $(patsubst %,-I%/,$(subst :, ,$(VPATH)))
 
 ASM           = nasm
 ASMFLAGS_BIN += -f bin
-ASMFLAGS     += -w+all
+ASMFLAGS     += -w+all -D$(BOOT_FS)_BOOT
 ASMFLAGS     += $(patsubst %,-I%/,$(subst :, ,$(VPATH)))
 
 include $(patsubst %,%/module.mk,$(MODULES))

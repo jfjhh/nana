@@ -6,6 +6,7 @@ VERSION  := @VERSION@
 TARGET_ARCH  ?= i686-elf
 PREFIX       ?= ..
 BUILDDIRNAME := _$(PROJNAME)_$(TARGET_ARCH)
+BOOT_FS      ?= FAT12
 
 # Output Configuration
 DRIVE ?= /dev/sdb
