@@ -5,6 +5,8 @@
 %ifndef FAT_EBR
 %define FAT_EBR
 
+%include "fat_12_16.inc"
+
 ;
 ; set the jmp length over the BPB and EBR, depending on the type of FAT
 ; filesystem used for the boot partition.
@@ -33,7 +35,7 @@ db "FAT32   "       ; system ID string (<-always) (no trust).| 82     | 8      |
 ; dw 0xaa55         ; bootable partition magic bytes.        | 510    | 2      |
 ;-------------------'----------------------------------------'--------'--------'
 
-%elifdef (FAT12_BOOT || FAT16_BOOT)
+%elifdef FAT_12_16_BOOT
 
 ;                            .===================.
 ;                            | FAT 12 and FAT 16 |

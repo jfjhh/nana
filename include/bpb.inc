@@ -5,6 +5,8 @@
 %ifndef FAT_BPB
 %define FAT_BPB
 
+%include "fat_12_16.inc"
+
 ;
 ; set the jmp length over the BPB and EBR, depending on the type of FAT
 ; filesystem used for the boot partition.
@@ -17,7 +19,7 @@
 
 code:	equ 0x58
 
-%elifdef (FAT12_BOOT || FAT16_BOOT)
+%elifdef FAT_12_16_BOOT
 
 code:	equ 0x3c
 

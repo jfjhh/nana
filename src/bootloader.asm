@@ -17,6 +17,7 @@
 ;
 
 ;
+; TODO: fix loading problem (no code loaded after 0x8400) (check VBR?)
 ; TODO: load kernel and other resources from disk and run kernel
 ;
 
@@ -678,8 +679,6 @@ nana_splash:
 	xor si, si		; zero si
 	mov ax, splashinfo.seg	; loaded bitmap memory location
 	mov ds, ax		; set segment for lodsb
-
-	xchg bx, bx		; Bochs magic breakpoint
 
 .bmp:	lodsb			; load the byte at [ds:si] into al
 	mov ah, al		; save byte
