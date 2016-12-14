@@ -1,6 +1,6 @@
 # Project Information
-PROJNAME := @PROJNAME@
-VERSION  := @VERSION@
+PROJNAME     := @PROJNAME@
+VERSION      := @VERSION@
 
 # Build Configuration
 TARGET_ARCH  ?= i686-elf
@@ -9,5 +9,6 @@ BUILDDIRNAME := _$(PROJNAME)_$(TARGET_ARCH)
 BOOT_FS      ?= FAT12
 
 # Output Configuration
-DRIVE ?= /dev/sdb
+DRIVE        ?= /dev/sdc
+TFTP_DIR     ?= .
 

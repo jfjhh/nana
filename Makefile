@@ -28,6 +28,8 @@ DISK         := disk.img
 BOOT         := boot.img
 VOLNAME      := "OSMomo Boot"
 
+PXE          := pxemomo.0
+
 LD            = ld
 LDFLAGS_HOST :=
 LDFLAGS      :=
@@ -44,8 +46,8 @@ ASMFLAGS     += $(patsubst %,-I%/,$(subst :, ,$(VPATH)))
 
 include $(patsubst %,%/module.mk,$(MODULES))
 
-all: $(WRITE_DATA) $(UPDATE_DATA) | $(DISK) $(BOOT)
-	set -e; \
+all: $(WRITE_DATA) $(UPDATE_DATA) $(PXE) | $(DISK) $(BOOT)
+	@set -e; \
 		$(WRITE_DATA) $(BOOT) $(DISK) $(FAT_SEC); \
 		$(UPDATE_DATA) $(DATALIST) $(WRITE_DATA) $(DISK) $(DATADIR); \
 		printf "\033[0;1m"; \
@@ -58,13 +60,13 @@ all: $(WRITE_DATA) $(UPDATE_DATA) | $(DISK) $(BOOT)
 -include $(patsubst %.c,.%.deps,$(CSOURCES))
 
 .%.deps: %.asm
-	set -e; rm -f $@; \
+	@set -e; rm -f $@; \
 		$(ASM) -M -MQ $*.bin $(ASMFLAGS) $< > $@.$$$$; \
 		sed 's,\($*\)\.bin[ :]*,\1.bin $@ : ,g' < $@.$$$$ > $@; \
 		rm -f $@.$$$$
 
 .%.deps: %.c
-	set -e; rm -f $@; \
+	@set -e; rm -f $@; \
 		$(CC) -MM $(CFLAGS) $(CFLAGS_HOST) $< > $@.$$$$; \
 		sed 's,\($*\)\.o[ :]*,\1.o $@ : ,g' < $@.$$$$ > $@; \
 		rm -f $@.$$$$
@@ -78,15 +80,22 @@ all: $(WRITE_DATA) $(UPDATE_DATA) | $(DISK) $(BOOT)
 %: %.o
 	$(CC) $(CFLAGS) $(CFLAGS_HOST) $< -o $@
 
+pxe: $(PXE)
+$(PXE): pxemomo.asm
+	$(ASM) $(ASMFLAGS_BIN) $< -o $(TFTP_DIR)/$@
+	@printf "*** PXE bootloader is in TFTP dir $(TFTP_DIR) ***\n"; \
+		ls -FlAsh1 $(TFTP_DIR); \
+		printf "\033[0;1m*** A test machine should be able to network boot now. ***\033[0m\n"
+
 $(DISK): mbr.bin $(MAKE_DISK) $(WRITE_DATA)
-	set -e; \
+	@set -e; \
 		$(MAKE_DISK) $@ $(FAT_SEC); \
 		$(WRITE_DATA) $< $(DISK);
 
 # Write all sectors to the image, and then re-do the VBR with a BPT (mformat).
 # Strange dd values are for a zero'ed 1440-byte, 3.5-inch floppy.
 $(BOOT): vbr.bin bootloader.bin $(WRITE_DATA)
-	set -e; \
+	@set -e; \
 		dd if=/dev/zero of=$@ bs=96 count=15; \
 		$(WRITE_DATA) $< $@ 0; \
 		mformat -i $@ -v $(VOLNAME) \
@@ -96,7 +105,7 @@ $(BOOT): vbr.bin bootloader.bin $(WRITE_DATA)
 		touch .newdisk -r $(DISK); \
 
 $(BOCHSRC): $(BOCHRC_IN)
-	set -e; \
+	@set -e; \
 		cp $(BOCHSRC_IN) $(BOCHSRC); \
 		sed -i $(BOCHSRC) \
 		-e "s,@DISK@,$(DISK),g" \
@@ -109,7 +118,7 @@ bochs: $(BOCHSRC) all
 	bochs -qf $<
 
 drive: all
-	set -e; \
+	@set -e; \
 		if ! [ -b "$(DRIVE)" ]; then \
 		printf "\033[0;31m*** \`$(DRIVE)\` is not a block device! ***\033[0m\n"; \
 		exit 1; \
@@ -129,12 +138,12 @@ drive: all
 		else \
 		printf "\033[0;31m*** Cancelled. ***\033[0m\n"; \
 		fi; \
-		fi;
-	@printf "\033[0m"
+		fi; \
+		printf "\033[0m"
 
 .PRECIOUS: %.o
 
-.PHONY: all qemu bochs drive
+.PHONY: all qemu bochs drive pxe
 
 endif ### VPATH Build ###
 
